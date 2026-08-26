@@ -146,6 +146,8 @@ fn typ_to_reached_type(typ: &Typ) -> ReachedType {
         TypX::Primitive(Primitive::Slice | Primitive::Ptr | Primitive::Global, _) => {
             ReachedType::Primitive
         }
+        // No datatype declarations to reach: the sort and its axioms are in the prelude.
+        TypX::Primitive(Primitive::TypeTag, _) => ReachedType::None,
         TypX::MutRef(_) => ReachedType::None,
         TypX::Opaque { .. } => ReachedType::None,
     }

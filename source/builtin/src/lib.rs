@@ -2346,6 +2346,30 @@ pub fn arch_word_bits() -> nat {
     unimplemented!();
 }
 
+/// The identity of `T`, as `core::any::TypeId`.
+///
+/// Spec-mode, but *not* a ghost counterpart of `core::any::TypeId` -- it is the
+/// same type. `TypeId::of::<T>()` in exec code and `type_id::<T>()` in a spec
+/// denote one value, compared with one notion of equality, so a runtime test
+/// establishes the ghost fact directly with no `view()` in between.
+///
+/// Identity is decoration-sensitive, as `core::any::TypeId` is: `T`, `&T`,
+/// `Box<T>`, `Rc<T>` and `Arc<T>` are all distinct, at every level of nesting.
+/// Decorations live in a sort of their own rather than in `Type`, so the tag is
+/// built from both components; see `TYPE%tagd` in `vir/src/prelude.rs`.
+///
+/// It cannot distinguish *type parameters*: `A` and `B` may be instantiated
+/// equally, so `type_id::<A>() != type_id::<B>()` is not provable, by design.
+///
+/// Unlike `core::any::TypeId::of`, this has no `'static` bound -- it is spec-only
+/// and total over Verus types, including `int`, `nat` and non-`'static` ones,
+/// which have no runtime id to disagree with.
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::type_id"]
+pub fn type_id<T: ?Sized>() -> core::any::TypeId {
+    unimplemented!();
+}
+
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::is_smaller_than"]
 pub fn is_smaller_than<A, B>(_: A, _: B) -> bool {

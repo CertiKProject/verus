@@ -1585,6 +1585,50 @@ fn is_unsized_blanket_impl(ti: &TraitImpl) -> bool {
     }
 }
 
+/// Whether this module's (pruned) krate mentions type identity at all.
+///
+/// Keyed on the `type_id::<T>()` *expression*, not on the `TypeId` type. That is
+/// the precise signal: a `TYPE%tag` term can only be produced by lowering this
+/// operator, and the tag axioms fire on nothing else. Scanning for the type
+/// instead would flip the flag on for every module, since `vstd`'s `TypeId::of`
+/// specification puts that type in reach of all of them.
+///
+/// This gates *emission*, not correctness. The tag axioms are trigger-inert --
+/// nothing matches `TYPE%tag(..)` unless something asks for a tag -- but merely
+/// declaring a sort and a few dozen axioms perturbs Z3's heuristics, which is
+/// enough to move a proof that was near its rlimit. A module that never mentions
+/// type identity gets a prelude byte-identical to stock.
+pub fn krate_uses_type_id(krate: &Krate) -> bool {
+    use crate::ast::{ExprX, NullaryOpr};
+    use crate::ast_visitor::{AstVisitor, Walk, NoScoper};
+
+    struct FindTypeTag(bool);
+    impl AstVisitor<Walk, crate::ast::VirErr, NoScoper> for FindTypeTag {
+        fn visit_expr(&mut self, expr: &crate::ast::Expr) -> Result<(), crate::ast::VirErr> {
+            if let ExprX::NullaryOpr(NullaryOpr::TypeTag(_)) = &expr.x {
+                self.0 = true;
+            }
+            self.visit_expr_rec(expr)
+        }
+        fn visit_stmt(&mut self, stmt: &crate::ast::Stmt) -> Result<(), crate::ast::VirErr> {
+            self.visit_stmt_rec(stmt)
+        }
+        fn visit_place(&mut self, place: &crate::ast::Place) -> Result<(), crate::ast::VirErr> {
+            self.visit_place_rec(place)
+        }
+        fn visit_pattern(&mut self, p: &crate::ast::Pattern) -> Result<(), crate::ast::VirErr> {
+            self.visit_pattern_rec(p)
+        }
+        fn visit_typ(&mut self, typ: &Typ) -> Result<(), crate::ast::VirErr> {
+            self.visit_typ_rec(typ)
+        }
+    }
+
+    let mut visitor = FindTypeTag(false);
+    visitor.visit_krate(krate).unwrap();
+    visitor.0
+}
+
 // TODO: delete this when https://github.com/rust-lang/rust/issues/57893 is fixed
 pub fn get_dyn_traits(krate: &Krate) -> HashSet<Path> {
     use crate::ast_visitor::{AstVisitor, WalkTypVisitorEnv};

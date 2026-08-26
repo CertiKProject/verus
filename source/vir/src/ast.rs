@@ -252,6 +252,17 @@ pub enum Primitive {
     StrSlice,
     Ptr, // Mut ptr, unless Const decoration is applied
     Global,
+    /// The structural identity of a type, surfaced to Verus as `TypeId` and
+    /// produced by `type_id::<T>()`. Its SMT sort is `TypeTag`
+    /// (see `def::TYPE_TAG_SORT`), so two of these are equal exactly when the tag
+    /// axioms make their types equal.
+    ///
+    /// NOT to be confused with `TypX::TypeId`, which is the type of a raw type
+    /// *identifier* (SMT sort `Type`) used internally to pass type arguments. A
+    /// bare `Type` term is useless for proving distinctness, because the tag
+    /// axioms are triggered on `TYPE%tag(..)` applications; this variant exists
+    /// precisely to produce such an application.
+    TypeTag,
 }
 
 #[derive(Debug, Serialize, Deserialize, Hash, ToDebugSNode, Clone)]
@@ -370,6 +381,8 @@ pub enum NullaryOpr {
     TypEqualityBound(Path, Typs, Ident, Typ),
     /// predicate representing const type bound, e.g., `const X: usize`
     ConstTypBound(Typ, Typ),
+    /// identity of a type, as in `type_id::<T>()`; carries the type it identifies
+    TypeTag(Typ),
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, ToDebugSNode)]

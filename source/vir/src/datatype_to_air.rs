@@ -102,6 +102,7 @@ fn uses_ext_equal(ctx: &Ctx, typ: &Typ) -> bool {
         TypX::Primitive(crate::ast::Primitive::StrSlice, _) => false,
         TypX::Primitive(crate::ast::Primitive::Ptr, _) => false,
         TypX::Primitive(crate::ast::Primitive::Global, _) => false,
+        TypX::Primitive(crate::ast::Primitive::TypeTag, _) => false,
         TypX::FnDef(..) => false,
         TypX::MutRef(_) => false,
         TypX::Opaque { .. } => false,
@@ -129,6 +130,7 @@ fn datatype_or_fun_to_air_commands(
     span: &Span,
     kind: EncodedDtKind,
     dpath: &Path, // encoded path
+    tag_counter: &mut u64,
     dtyp: &air::ast::Typ,
     dtyp_id: Option<DTypId>,
     datatyp: Typ,
@@ -156,6 +158,82 @@ fn datatype_or_fun_to_air_commands(
             str_typ(crate::def::TYPE),
         ));
         token_commands.push(Arc::new(CommandX::Global(decl_type_id)));
+
+        // --- Type identity: structural tag for this constructor -------------
+        // Emits, for `Foo<A, B>`:
+        //   (axiom (forall ((dA Dcr) (tA Type) (dB Dcr) (tB Type)) (!
+        //      (= (TYPE%tag (TYPE%Foo dA tA dB tB))
+        //         (tag%app (tag%app (tag%mk <k_Foo>) (TYPE%tag tA)) (TYPE%tag tB)))
+        //      :pattern ((TYPE%tag (TYPE%Foo dA tA dB tB))))))
+        //
+        // The pattern is on the TAG application, never on the bare `TYPE%Foo`
+        // application: the latter appears inside `has_type` patterns and is one
+        // of the hottest terms in the encoding, so triggering on it would fire
+        // this axiom in every query. Triggering on the tag keeps it inert
+        // unless something actually asks for type identity.
+        //
+        // `k_Foo` is a hash of the fully-qualified path, so it is unique across
+        // separately-compiled crates without any coordination. This mirrors how
+        // string literals are handled (`sst_to_air::str_to_const_str`) and
+        // inherits the same no-collision assumption.
+        *tag_counter += 1;
+        if ctx.uses_type_id {
+            let mut binders: Vec<air::ast::Binder<air::ast::Typ>> = Vec::new();
+            let mut id_args: Vec<Expr> = Vec::new();
+            let mut tag_args: Vec<Expr> = Vec::new();
+            for (i, _) in tparams.iter().enumerate() {
+                // types() is (Dcr, Type). Both components are tagged, via
+                // TYPE%tagd, so that `G<&u8>` and `G<u8>` are distinct -- tagging
+                // only the Type half is what made parameter decorations invisible.
+                let mut param_ids: Vec<Expr> = Vec::new();
+                for (j, s) in crate::def::types().iter().enumerate() {
+                    let nm = air_unique_var(&format!("tag%p{}%{}", i, j));
+                    binders.push(ident_binder(&nm.lower(), &str_typ(s)));
+                    let v = ident_var(&nm.lower());
+                    param_ids.push(v.clone());
+                    id_args.push(v);
+                }
+                // The body of TYPE%tagd, inlined. Naming the function here instead
+                // would put one more quantifier on the hottest path in the
+                // encoding -- these axioms are instantiated far more than any
+                // user-written `type_id::<T>()` -- for no gain in what is proved.
+                tag_args.push(str_apply(
+                    crate::def::TYPE_TAG_APP,
+                    &vec![
+                        str_apply(crate::def::DCR_TAG, &vec![param_ids[0].clone()]),
+                        str_apply(crate::def::TYPE_TAG, &vec![param_ids[1].clone()]),
+                    ],
+                ));
+            }
+            let k = tag_counter.to_string();
+            let mut rhs = str_apply(
+                crate::def::TYPE_TAG_MK,
+                &vec![Arc::new(ExprX::Const(air::ast::Constant::Nat(Arc::new(k))))],
+            );
+            for a in tag_args.iter() {
+                rhs = str_apply(crate::def::TYPE_TAG_APP, &vec![rhs, a.clone()]);
+            }
+            let id_app = if id_args.is_empty() {
+                ident_var(&ctx.name_ctxt.prefix_type_id(dpath))
+            } else {
+                ident_apply(&ctx.name_ctxt.prefix_type_id(dpath), &Arc::new(id_args))
+            };
+            let lhs = str_apply(crate::def::TYPE_TAG, &vec![id_app]);
+            let body = mk_eq(&lhs, &rhs);
+            let axiom = if binders.is_empty() {
+                mk_unnamed_axiom(body)
+            } else {
+                let trigs = Arc::new(vec![Arc::new(vec![lhs.clone()])]);
+                let bind = Arc::new(air::ast::BindX::Quant(
+                    air::ast::Quant::Forall,
+                    Arc::new(binders),
+                    trigs,
+                    None,
+                ));
+                mk_unnamed_axiom(mk_bind_expr(&bind, &body))
+            };
+            token_commands.push(Arc::new(CommandX::Global(axiom)));
+        }
     }
 
     if declare_box {
@@ -683,6 +761,13 @@ pub fn datatypes_and_primitives_to_air(ctx: &Ctx, datatypes: &crate::ast::Dataty
     let mut box_commands: Vec<Command> = Vec::new();
     let mut field_commands: Vec<Command> = Vec::new();
     let mut axiom_commands: Vec<Command> = Vec::new();
+    // Type-identity tags for user constructors: a running count over the
+    // constructors emitted into *this* context, rather than a hash of the path.
+    // The number is materialised in exactly one place -- the tag axiom below --
+    // and never crosses contexts, so injectivity within one query is all that is
+    // required, and a counter gives that by construction rather than by
+    // assumption.
+    let mut tag_counter: u64 = 0;
 
     for spec_fn_n_params in &ctx.spec_fn_types {
         let tparams: Vec<Ident> =
@@ -696,6 +781,7 @@ pub fn datatypes_and_primitives_to_air(ctx: &Ctx, datatypes: &crate::ast::Dataty
             &ctx.global.no_span,
             EncodedDtKind::FnSpec,
             &prefix_spec_fn_type(*spec_fn_n_params),
+            &mut tag_counter,
             &Arc::new(air::ast::TypX::Fun),
             None,
             Arc::new(TypX::SpecFn(Arc::new(vec![]), Arc::new(TypX::Bool))),
@@ -717,6 +803,7 @@ pub fn datatypes_and_primitives_to_air(ctx: &Ctx, datatypes: &crate::ast::Dataty
             &ctx.global.no_span,
             EncodedDtKind::Array,
             &crate::def::array_type(),
+            &mut tag_counter,
             &Arc::new(air::ast::TypX::Fun),
             Some(DTypId::Primitive(crate::ast::Primitive::Array)),
             Arc::new(TypX::Primitive(crate::ast::Primitive::Array, Arc::new(vec![]))),
@@ -743,6 +830,7 @@ pub fn datatypes_and_primitives_to_air(ctx: &Ctx, datatypes: &crate::ast::Dataty
             &ctx.global.no_span,
             EncodedDtKind::Monotyp,
             &dpath,
+            &mut tag_counter,
             &str_typ(&path_to_air_ident(&ctx.name_ctxt, &dpath)),
             Some(DTypId::Expr(
                 crate::sst_to_air::monotyp_to_id(ctx, monotyp).last().unwrap().clone(),
@@ -782,6 +870,7 @@ pub fn datatypes_and_primitives_to_air(ctx: &Ctx, datatypes: &crate::ast::Dataty
             &datatype.span,
             EncodedDtKind::Dt(dt.clone()),
             &encode_dt_as_path(dt),
+            &mut tag_counter,
             &str_typ(&dt_to_air_ident(&ctx.name_ctxt, dt)),
             None,
             datatyp,

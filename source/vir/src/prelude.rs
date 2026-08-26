@@ -163,6 +163,18 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
     let type_id_slice = str_to_node(TYPE_ID_SLICE);
     let type_id_strslice = str_to_node(TYPE_ID_STRSLICE);
     let type_id_ptr = str_to_node(TYPE_ID_PTR);
+    let type_tag_sort = str_to_node(TYPE_TAG_SORT);
+    let type_tag = str_to_node(TYPE_TAG);
+    let type_tag_d = str_to_node(TYPE_TAG_D);
+    let dcr_tag = str_to_node(DCR_TAG);
+    let type_id_typetag = str_to_node(TYPE_ID_TYPETAG);
+    let box_typetag = str_to_node(BOX_TYPETAG);
+    let unbox_typetag = str_to_node(UNBOX_TYPETAG);
+    let tag_mk = str_to_node(TYPE_TAG_MK);
+    let tag_id = str_to_node(TYPE_TAG_ID);
+    let tag_app = str_to_node(TYPE_TAG_APP);
+    let tag_fn = str_to_node(TYPE_TAG_FN);
+    let tag_arg = str_to_node(TYPE_TAG_ARG);
     let type_id_global = str_to_node(TYPE_ID_GLOBAL);
     let type_id_mut_ref = str_to_node(TYPE_ID_MUT_REF);
 
@@ -203,6 +215,7 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
         (declare-fun [unbox_real] ([Poly]) Real)
         (declare-fun [unbox_fndef] ([Poly]) [FnDef])
         (declare-sort [typ] 0)
+        (declare-const [type_id_typetag] [typ])
         (declare-const [type_id_bool] [typ])
         (declare-const [type_id_int] [typ])
         (declare-const [type_id_nat] [typ])
@@ -216,6 +229,21 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
         (declare-fun [type_id_float] (Int) [typ])
         (declare-fun [type_id_const_int] (Int) [typ])
         (declare-fun [type_id_const_bool] (Bool) [typ])
+        // Type identity: a structural tag over type ids. A curried spine, so a
+        // single sort with two constructors covers any constructor arity:
+        //   Foo<a, b>  ~>  (tag%app (tag%app (tag%mk k) (tag a)) (tag b))
+        (declare-datatypes (([type_tag_sort] 0))
+            ((([tag_mk] ([tag_id] Int))
+              ([tag_app] ([tag_fn] [type_tag_sort]) ([tag_arg] [type_tag_sort])))))
+        (declare-fun [type_tag] ([typ]) [type_tag_sort])
+        // `TypeId` is surfaced to Verus as a primitive whose SMT sort is
+        // [type_tag_sort]. Unlike [FnDef] -- a singleton, where the box/unbox
+        // round-trip holds trivially because all its values are equal -- this sort
+        // has many values, so it needs real box/unbox axioms (further below).
+        // Declared here rather than with the other boxes because [type_tag_sort]
+        // must exist first.
+        (declare-fun [box_typetag] ([type_tag_sort]) [Poly])
+        (declare-fun [unbox_typetag] ([Poly]) [type_tag_sort])
         (declare-sort [decoration] 0)
         (declare-const [decorate_nil_sized] [decoration])
         (declare-const [decorate_nil_slice] [decoration])
@@ -229,6 +257,14 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
         (declare-fun [decorate_tracked] ([decoration]) [decoration])
         (declare-fun [decorate_never] ([decoration]) [decoration])
         (declare-fun [decorate_const_ptr] ([decoration]) [decoration])
+        // Decoration-sensitive identity. [type_tag] alone is undecorated -- it is
+        // a function of the [typ] component only, and decorations live in a
+        // separate sort -- so `&T` and `T` would share it. [type_tag_d] pairs a
+        // decoration spine with a base tag, and [dcr_tag] gives that spine a tag
+        // of its own. Every use site that means "the identity of this type"
+        // applies [type_tag_d] to both components of `typ_to_ids`.
+        (declare-fun [dcr_tag] ([decoration]) [type_tag_sort])
+        (declare-fun [type_tag_d] ([decoration] [typ]) [type_tag_sort])
         (declare-fun [type_id_array] ([decoration] [typ] [decoration] [typ]) [typ])
         (declare-fun [type_id_mut_ref] ([decoration] [typ]) [typ])
         (declare-fun [type_id_slice] ([decoration] [typ]) [typ])
@@ -373,6 +409,198 @@ pub(crate) fn prelude_nodes(name_ctxt: &NameCtxt, config: PreludeConfig) -> Vec<
             :pattern (([type_id_const_bool] b))
             :qid prelude_type_id_const_bool
             :skolemid skolem_prelude_type_id_const_bool
+        )))
+        // --- Type identity: tags for the primitive type ids -----------------
+        // Nullary ids are plain leaves. Parameterised ones apply their argument,
+        // so e.g. UINT 8 and UINT 16 are provably distinct. Every pattern is on
+        // the TAG application, never the bare type id, so these stay inert
+        // unless something asks for a tag.
+        (axiom (= ([type_tag] [type_id_bool])  ([tag_mk] (- 1))))
+        (axiom (= ([type_tag] [type_id_int])   ([tag_mk] (- 2))))
+        (axiom (= ([type_tag] [type_id_nat])   ([tag_mk] (- 3))))
+        (axiom (= ([type_tag] [type_id_real])  ([tag_mk] (- 4))))
+        (axiom (= ([type_tag] [type_id_char])  ([tag_mk] (- 5))))
+        (axiom (= ([type_tag] [type_id_usize]) ([tag_mk] (- 6))))
+        (axiom (= ([type_tag] [type_id_isize]) ([tag_mk] (- 7))))
+        (axiom (forall ((n Int)) (!
+            (= ([type_tag] ([type_id_uint] n)) ([tag_app] ([tag_mk] (- 8)) ([tag_mk] n)))
+            :pattern (([type_tag] ([type_id_uint] n)))
+            :qid prelude_type_tag_uint
+            :skolemid skolem_prelude_type_tag_uint
+        )))
+        (axiom (forall ((n Int)) (!
+            (= ([type_tag] ([type_id_sint] n)) ([tag_app] ([tag_mk] (- 9)) ([tag_mk] n)))
+            :pattern (([type_tag] ([type_id_sint] n)))
+            :qid prelude_type_tag_sint
+            :skolemid skolem_prelude_type_tag_sint
+        )))
+        (axiom (forall ((n Int)) (!
+            (= ([type_tag] ([type_id_float] n)) ([tag_app] ([tag_mk] (- 10)) ([tag_mk] n)))
+            :pattern (([type_tag] ([type_id_float] n)))
+            :qid prelude_type_tag_float
+            :skolemid skolem_prelude_type_tag_float
+        )))
+        (axiom (forall ((n Int)) (!
+            (= ([type_tag] ([type_id_const_int] n)) ([tag_app] ([tag_mk] (- 11)) ([tag_mk] n)))
+            :pattern (([type_tag] ([type_id_const_int] n)))
+            :qid prelude_type_tag_const_int
+            :skolemid skolem_prelude_type_tag_const_int
+        )))
+        (axiom (= ([type_tag] [type_id_typetag])   ([tag_mk] (- 20))))
+        // Box/unbox for the `TypeId` primitive, mirroring the int/bool/real triples.
+        (axiom (forall ((x [type_tag_sort])) (!
+            (= x ([unbox_typetag] ([box_typetag] x)))
+            :pattern (([box_typetag] x))
+            :qid prelude_unbox_box_typetag
+            :skolemid skolem_prelude_unbox_box_typetag
+        )))
+        (axiom (forall ((x [Poly])) (!
+            (=>
+                ([has_type] x [type_id_typetag])
+                (= x ([box_typetag] ([unbox_typetag] x)))
+            )
+            :pattern (([has_type] x [type_id_typetag]))
+            :qid prelude_box_unbox_typetag
+            :skolemid skolem_prelude_box_unbox_typetag
+        )))
+        (axiom (forall ((x [type_tag_sort])) (!
+            ([has_type] ([box_typetag] x) [type_id_typetag])
+            :pattern (([has_type] ([box_typetag] x) [type_id_typetag]))
+            :qid prelude_has_type_typetag
+            :skolemid skolem_prelude_has_type_typetag
+        )))
+        // --- Type identity: folding the decoration spine --------------------
+        // [type_tag_d] is the identity of a type: its decoration spine paired
+        // with its undecorated base tag. Injectivity is free -- [type_tag_sort]
+        // is a datatype, so [tag_app] is injective and its constructors are
+        // distinct -- provided [dcr_tag] separates decoration spines, which the
+        // axioms below do, in the same shape as the type-side ones.
+        //
+        // Decoration ids live at -101 and below, disjoint from the built-in type
+        // ids (-1 .. -20) and from datatype ids (non-negative), though they could
+        // not collide anyway: the two sit in different argument positions.
+        (axiom (forall ((d [decoration]) (t [typ])) (!
+            (= ([type_tag_d] d t) ([tag_app] ([dcr_tag] d) ([type_tag] t)))
+            :pattern (([type_tag_d] d t))
+            :qid prelude_type_tag_d
+            :skolemid skolem_prelude_type_tag_d
+        )))
+        (axiom (= ([dcr_tag] [decorate_nil_sized]) ([tag_mk] (- 101))))
+        (axiom (= ([dcr_tag] [decorate_nil_slice]) ([tag_mk] (- 102))))
+        (axiom (= ([dcr_tag] [decorate_nil_dyn])   ([tag_mk] (- 103))))
+        (axiom (forall ((d [decoration])) (!
+            (= ([dcr_tag] ([decorate_dst_inherit] d)) ([tag_app] ([tag_mk] (- 104)) ([dcr_tag] d)))
+            :pattern (([dcr_tag] ([decorate_dst_inherit] d)))
+            :qid prelude_dcr_tag_dst
+            :skolemid skolem_prelude_dcr_tag_dst
+        )))
+        (axiom (forall ((d [decoration])) (!
+            (= ([dcr_tag] ([decorate_ref] d)) ([tag_app] ([tag_mk] (- 105)) ([dcr_tag] d)))
+            :pattern (([dcr_tag] ([decorate_ref] d)))
+            :qid prelude_dcr_tag_ref
+            :skolemid skolem_prelude_dcr_tag_ref
+        )))
+        (axiom (forall ((d [decoration])) (!
+            (= ([dcr_tag] ([decorate_ghost] d)) ([tag_app] ([tag_mk] (- 106)) ([dcr_tag] d)))
+            :pattern (([dcr_tag] ([decorate_ghost] d)))
+            :qid prelude_dcr_tag_ghost
+            :skolemid skolem_prelude_dcr_tag_ghost
+        )))
+        (axiom (forall ((d [decoration])) (!
+            (= ([dcr_tag] ([decorate_tracked] d)) ([tag_app] ([tag_mk] (- 107)) ([dcr_tag] d)))
+            :pattern (([dcr_tag] ([decorate_tracked] d)))
+            :qid prelude_dcr_tag_tracked
+            :skolemid skolem_prelude_dcr_tag_tracked
+        )))
+        (axiom (forall ((d [decoration])) (!
+            (= ([dcr_tag] ([decorate_never] d)) ([tag_app] ([tag_mk] (- 108)) ([dcr_tag] d)))
+            :pattern (([dcr_tag] ([decorate_never] d)))
+            :qid prelude_dcr_tag_never
+            :skolemid skolem_prelude_dcr_tag_never
+        )))
+        (axiom (forall ((d [decoration])) (!
+            (= ([dcr_tag] ([decorate_const_ptr] d)) ([tag_app] ([tag_mk] (- 109)) ([dcr_tag] d)))
+            :pattern (([dcr_tag] ([decorate_const_ptr] d)))
+            :qid prelude_dcr_tag_const_ptr
+            :skolemid skolem_prelude_dcr_tag_const_ptr
+        )))
+        // Box/Rc/Arc carry their allocator type as (decoration, typ), so that is
+        // folded too: `Box<T, A1>` and `Box<T, A2>` are different types.
+        (axiom (forall ((ad [decoration]) (at [typ]) (d [decoration])) (!
+            (= ([dcr_tag] ([decorate_box] ad at d))
+               ([tag_app]
+                   ([tag_app] ([tag_mk] (- 110)) ([tag_app] ([dcr_tag] ad) ([type_tag] at)))
+                   ([dcr_tag] d)))
+            :pattern (([dcr_tag] ([decorate_box] ad at d)))
+            :qid prelude_dcr_tag_box
+            :skolemid skolem_prelude_dcr_tag_box
+        )))
+        (axiom (forall ((ad [decoration]) (at [typ]) (d [decoration])) (!
+            (= ([dcr_tag] ([decorate_rc] ad at d))
+               ([tag_app]
+                   ([tag_app] ([tag_mk] (- 111)) ([tag_app] ([dcr_tag] ad) ([type_tag] at)))
+                   ([dcr_tag] d)))
+            :pattern (([dcr_tag] ([decorate_rc] ad at d)))
+            :qid prelude_dcr_tag_rc
+            :skolemid skolem_prelude_dcr_tag_rc
+        )))
+        (axiom (forall ((ad [decoration]) (at [typ]) (d [decoration])) (!
+            (= ([dcr_tag] ([decorate_arc] ad at d))
+               ([tag_app]
+                   ([tag_app] ([tag_mk] (- 112)) ([tag_app] ([dcr_tag] ad) ([type_tag] at)))
+                   ([dcr_tag] d)))
+            :pattern (([dcr_tag] ([decorate_arc] ad at d)))
+            :qid prelude_dcr_tag_arc
+            :skolemid skolem_prelude_dcr_tag_arc
+        )))
+        (axiom (= ([type_tag] [type_id_strslice]) ([tag_mk] (- 12))))
+        (axiom (= ([type_tag] [type_id_global])   ([tag_mk] (- 13))))
+        // A const bool has no tag of its own to recurse into, so its two
+        // values are mapped to two distinct leaves.
+        (axiom (forall ((b Bool)) (!
+            (= ([type_tag] ([type_id_const_bool] b))
+               ([tag_app] ([tag_mk] (- 14)) ([tag_mk] (ite b 1 0))))
+            :pattern (([type_tag] ([type_id_const_bool] b)))
+            :qid prelude_type_tag_const_bool
+            :skolemid skolem_prelude_type_tag_const_bool
+        )))
+        // Each of these carries its argument as a (decoration, typ) pair, so the
+        // fold is [type_tag_d], not [type_tag]: `*const &u8` and `*const u8` are
+        // different types, and so are `[&u8]` and `[u8]`.
+        (axiom (forall ((d [decoration]) (t [typ])) (!
+            (= ([type_tag] ([type_id_mut_ref] d t))
+               ([tag_app] ([tag_mk] (- 15)) ([tag_app] ([dcr_tag] d) ([type_tag] t))))
+            :pattern (([type_tag] ([type_id_mut_ref] d t)))
+            :qid prelude_type_tag_mut_ref
+            :skolemid skolem_prelude_type_tag_mut_ref
+        )))
+        (axiom (forall ((d [decoration]) (t [typ])) (!
+            (= ([type_tag] ([type_id_slice] d t))
+               ([tag_app] ([tag_mk] (- 16)) ([tag_app] ([dcr_tag] d) ([type_tag] t))))
+            :pattern (([type_tag] ([type_id_slice] d t)))
+            :qid prelude_type_tag_slice
+            :skolemid skolem_prelude_type_tag_slice
+        )))
+        (axiom (forall ((d [decoration]) (t [typ])) (!
+            (= ([type_tag] ([type_id_ptr] d t))
+               ([tag_app] ([tag_mk] (- 17)) ([tag_app] ([dcr_tag] d) ([type_tag] t))))
+            :pattern (([type_tag] ([type_id_ptr] d t)))
+            :qid prelude_type_tag_ptr
+            :skolemid skolem_prelude_type_tag_ptr
+        )))
+        // The unit type's id is declared in the prelude rather than by
+        // datatype_to_air (which skips Dt::Tuple(0) for that reason), so its tag
+        // belongs here too. Tuples of arity >= 1 are tagged as ordinary datatypes.
+        (axiom (= ([type_tag] [type_id_unit]) ([tag_mk] (- 18))))
+        // An array folds both its element type and its (type-level) length.
+        (axiom (forall ((d1 [decoration]) (t [typ]) (d2 [decoration]) (n [typ])) (!
+            (= ([type_tag] ([type_id_array] d1 t d2 n))
+               ([tag_app]
+                   ([tag_app] ([tag_mk] (- 19)) ([tag_app] ([dcr_tag] d1) ([type_tag] t)))
+                   ([tag_app] ([dcr_tag] d2) ([type_tag] n))))
+            :pattern (([type_tag] ([type_id_array] d1 t d2 n)))
+            :qid prelude_type_tag_array
+            :skolemid skolem_prelude_type_tag_array
         )))
         (axiom (forall ((b Bool)) (!
             ([has_type] ([box_bool] b) [type_id_bool])

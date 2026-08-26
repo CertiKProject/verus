@@ -137,6 +137,9 @@ pub struct Ctx {
     // proof debug purposes
     pub debug: bool,
     pub arch_word_bits: ArchWordBits,
+    /// Whether this module mentions type identity; gates emission of the tag
+    /// encoding. See `crate::traits::krate_uses_type_id`.
+    pub uses_type_id: bool,
 }
 
 impl Ctx {
@@ -246,6 +249,7 @@ fn datatypes_invs(
                         TypX::Decorate(..) => unreachable!("TypX::Decorate"),
                         TypX::Boxed(_) => {}
                         TypX::TypeId => {}
+                        TypX::Primitive(Primitive::TypeTag, _) => {}
                         TypX::Opaque { .. } => {}
                         TypX::Bool => {}
                         TypX::Float(_) => {}
@@ -883,6 +887,7 @@ impl Ctx {
             byte_string_hashes,
             debug,
             arch_word_bits: krate.arch.word_bits,
+            uses_type_id: crate::traits::krate_uses_type_id(krate),
             opaque_type_map,
         })
     }

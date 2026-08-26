@@ -87,6 +87,7 @@ const STRSLICE_TYPE: &str = "strslice%";
 const ARRAY_TYPE: &str = "array%";
 const PTR_TYPE: &str = "ptr_mut%";
 const GLOBAL_TYPE: &str = "allocator_global%";
+const TYPETAG_TYPE: &str = "typetag%";
 const PREFIX_SNAPSHOT: &str = "snap%";
 const SUBST_RENAME_SEPARATOR: &str = "$$";
 const EXPAND_ERRORS_DECL_SEPARATOR: &str = "$$$";
@@ -167,10 +168,12 @@ pub const BOX_INT: &str = "I";
 pub const BOX_BOOL: &str = "B";
 pub const BOX_REAL: &str = "R";
 pub const BOX_FNDEF: &str = "F";
+pub const BOX_TYPETAG: &str = "Tg";
 pub const UNBOX_INT: &str = "%I";
 pub const UNBOX_BOOL: &str = "%B";
 pub const UNBOX_REAL: &str = "%R";
 pub const UNBOX_FNDEF: &str = "%F";
+pub const UNBOX_TYPETAG: &str = "%Tg";
 pub const TYPE: &str = "Type";
 pub const TYPE_ID_BOOL: &str = "BOOL";
 pub const TYPE_ID_REAL: &str = "REAL";
@@ -184,6 +187,56 @@ pub const TYPE_ID_SINT: &str = "SINT";
 pub const TYPE_ID_FLOAT: &str = "FLOAT";
 pub const TYPE_ID_CONST_INT: &str = "CONST_INT";
 pub const TYPE_ID_CONST_BOOL: &str = "CONST_BOOL";
+
+// --- Type identity (see docs/verus-typeid-implementation-plan.md) ---------
+// A structural tag for type ids, so that distinct type constructors and
+// distinct instantiations of a constructor are provably distinct.
+//
+// A curried spine: `Foo<a, b>` tags as `app(app(mk k_Foo, tag a), tag b)`, so
+// one sort with two constructors covers constructors of any arity.
+//
+// Encoded as an SMT datatype rather than an Int + injectivity axiom: the
+// datatype gives constructor distinctness AND injectivity for free, which
+// avoids a quantified injectivity axiom and, critically, avoids a multi-pattern
+// over `TYPE%Foo(..)` -- a term that appears inside the `has_type` patterns and
+// is therefore one of the hottest in the encoding.
+//
+// Every tag axiom is triggered on the *tag application* `TYPE%tag(TYPE%Foo(..))`
+// and never on the bare constructor, so the axioms stay inert in queries that
+// do not mention type identity.
+//
+// Constructor ids come from two disjoint pools, so the two can never collide:
+// built-in constructors (declared in the prelude) use small NEGATIVE ids, while
+// user constructors are numbered 1, 2, 3, ... as they are emitted.
+//
+// The counter replaced a hash of the type's path, and with it the last collision
+// *assumption*: distinct constructors now get distinct ids by construction. What
+// makes a per-context counter sound is that the number is materialised in exactly
+// one place -- the tag axiom in `datatype_to_air` -- and never crosses contexts:
+// facts travel between modules as VIR, from which AIR is regenerated. So
+// injectivity is only ever needed within a single solver context, and one
+// emission pass per context supplies it. Two emission passes into one context
+// would break that, which is why there is exactly one.
+//
+// The cost is that an id is positional rather than intrinsic: adding a datatype
+// shifts the ones after it, so an unrelated edit can perturb a proof's AIR. That
+// is bounded by the emission gate -- modules that never mention type identity
+// emit no tag axioms at all.
+pub const TYPE_TAG_SORT: &str = "TypeTag";
+pub const TYPE_TAG: &str = "TYPE%tag";
+// The decorated tag: `TYPE%tagd(d, t)` folds a type's decoration spine into its
+// tag, so `&T`, `Box<T>` and `T` no longer share an identity. `TYPE%tag` stays
+// the undecorated base, and every axiom over it is unchanged.
+pub const TYPE_TAG_D: &str = "TYPE%tagd";
+pub const DCR_TAG: &str = "dcr%tag";
+// `TypeTag` is itself a Verus-visible type (surfaced as `TypeId`), so like any
+// other type it needs a type id of its own.
+pub const TYPE_ID_TYPETAG: &str = "TYPETAG";
+pub const TYPE_TAG_MK: &str = "tag%mk";
+pub const TYPE_TAG_ID: &str = "tag%id";
+pub const TYPE_TAG_APP: &str = "tag%app";
+pub const TYPE_TAG_FN: &str = "tag%fn";
+pub const TYPE_TAG_ARG: &str = "tag%arg";
 pub const DECORATION: &str = "Dcr";
 pub const DECORATE_NIL_SIZED: &str = "$";
 pub const DECORATE_NIL_SLICE: &str = "$slice"; // for 'str' and '[T]' types
@@ -594,6 +647,11 @@ pub fn ptr_type() -> Path {
 
 pub fn global_type() -> Path {
     let ident = Arc::new(GLOBAL_TYPE.to_string());
+    Arc::new(PathX { krate: CrateId::Internal, segments: Arc::new(vec![ident]) })
+}
+
+pub fn typetag_type() -> Path {
+    let ident = Arc::new(TYPETAG_TYPE.to_string());
     Arc::new(PathX { krate: CrateId::Internal, segments: Arc::new(vec![ident]) })
 }
 

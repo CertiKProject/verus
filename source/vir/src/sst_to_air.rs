@@ -97,6 +97,7 @@ pub(crate) fn primitive_path(name: &Primitive) -> Path {
         Primitive::StrSlice => crate::def::strslice_type(),
         Primitive::Ptr => crate::def::ptr_type(),
         Primitive::Global => crate::def::global_type(),
+        Primitive::TypeTag => crate::def::typetag_type(),
     }
 }
 
@@ -107,6 +108,7 @@ pub(crate) fn primitive_type_id(name: &Primitive) -> Ident {
         Primitive::StrSlice => crate::def::TYPE_ID_STRSLICE,
         Primitive::Ptr => crate::def::TYPE_ID_PTR,
         Primitive::Global => crate::def::TYPE_ID_GLOBAL,
+        Primitive::TypeTag => crate::def::TYPE_ID_TYPETAG,
     })
 }
 
@@ -156,6 +158,8 @@ pub(crate) fn typ_to_air(ctx: &Ctx, typ: &Typ) -> air::ast::Typ {
         TypX::Float(_) => int_typ(),
         TypX::SpecFn(..) => Arc::new(air::ast::TypX::Fun),
         TypX::Primitive(Primitive::Array, _) => Arc::new(air::ast::TypX::Fun),
+        // Its own prelude sort, like FnDef -- never goes through monotyp.
+        TypX::Primitive(Primitive::TypeTag, _) => str_typ(crate::def::TYPE_TAG_SORT),
         TypX::AnonymousClosure(..) => {
             panic!("internal error: AnonymousClosure should have been removed by ast_simplify")
         }
@@ -213,6 +217,14 @@ pub fn range_to_id(range: &IntRange) -> Expr {
     }
 }
 
+/// The AIR name of a decoration constructor.
+///
+/// Every name here also needs a `dcr%tag` axiom in `prelude.rs`, or that
+/// decoration drops out of type identity. This `match` is exhaustive, so adding a
+/// `TypDecoration` variant breaks the build here -- but the prelude is text and
+/// will not, and the symptom is silent: the new decoration gets an unconstrained
+/// tag, so `&T`-style confusions become unprovable-distinct again rather than
+/// wrong. Conservative, but it quietly weakens what a downcast can conclude.
 fn decoration_str(d: TypDecoration) -> &'static str {
     match d {
         TypDecoration::Ref => crate::def::DECORATE_REF,
@@ -301,7 +313,9 @@ fn big_int_to_expr(i: &BigInt) -> Expr {
 
 fn decoration_base_for_primitive(name: Primitive) -> &'static str {
     match name {
-        Primitive::Array | Primitive::Ptr | Primitive::Global => crate::def::DECORATE_NIL_SIZED,
+        Primitive::Array | Primitive::Ptr | Primitive::Global | Primitive::TypeTag => {
+            crate::def::DECORATE_NIL_SIZED
+        }
         Primitive::Slice | Primitive::StrSlice => crate::def::DECORATE_NIL_SLICE,
     }
 }
@@ -592,7 +606,7 @@ pub(crate) fn typ_invariant(ctx: &Ctx, typ: &Typ, expr: &Expr) -> Option<Expr> {
                         panic!("abstract datatype should be boxed")
                     }
                 }
-                Primitive::StrSlice | Primitive::Global => {}
+                Primitive::StrSlice | Primitive::Global | Primitive::TypeTag => {}
             }
             None
         }
@@ -652,6 +666,7 @@ fn try_box(ctx: &Ctx, expr: Expr, typ: &Typ) -> Option<Expr> {
             }
         }
         TypX::Dyn(..) => None,
+        TypX::Primitive(Primitive::TypeTag, _) => Some(str_ident(crate::def::BOX_TYPETAG)),
         TypX::Primitive(_, _) => {
             prefix_typ_as_mono(ctx, |p| ctx.name_ctxt.prefix_box(p), typ, "primitive type")
         }
@@ -692,6 +707,7 @@ pub(crate) fn try_unbox(ctx: &Ctx, expr: Expr, typ: &Typ) -> Option<Expr> {
         TypX::Primitive(Primitive::Array, _) => {
             Some(ctx.name_ctxt.prefix_unbox(&crate::def::array_type()))
         }
+        TypX::Primitive(Primitive::TypeTag, _) => Some(str_ident(crate::def::UNBOX_TYPETAG)),
         TypX::Primitive(_, _) => {
             prefix_typ_as_mono(ctx, |p| ctx.name_ctxt.prefix_unbox(p), typ, "primitive type")
         }
@@ -1058,6 +1074,16 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
         ExpX::NullaryOpr(crate::ast::NullaryOpr::ConstGeneric(c)) => {
             let f = crate::ast_util::const_generic_to_primitive(&exp.typ);
             str_apply(f, &vec![typ_to_id(ctx, c)])
+        }
+        // `type_id::<T>()` becomes the tag application `TYPE%tagd(<ids of T>)`.
+        // Producing the application is the point: the tag axioms are triggered on
+        // it, so a bare type id would leave them uninstantiated.
+        //
+        // Both components of `typ_to_ids`, not `typ_to_id`: the latter keeps only
+        // the [typ] half, which is what made identity undecorated and let `&T`,
+        // `Box<T>` and `T` share a tag.
+        ExpX::NullaryOpr(crate::ast::NullaryOpr::TypeTag(t)) => {
+            str_apply(crate::def::TYPE_TAG_D, &typ_to_ids(t))
         }
         ExpX::NullaryOpr(crate::ast::NullaryOpr::TraitBound(p, ts)) => {
             match crate::traits::trait_bound_to_air(ctx, p, ts) {

@@ -1146,6 +1146,17 @@ pub(crate) fn mid_ty_to_vir_ghost<'tcx>(
             } else {
                 let rust_item = verus_items::get_rust_item(tcx, did);
 
+                // `core::any::TypeId` *is* Verus's type identity: it translates to
+                // the same VIR type that `type_id::<T>()` produces, so a runtime id
+                // and a ghost one are one type with one notion of equality. There is
+                // no `view()` between them and no separate `TypeIdSpec`.
+                if rust_item == Some(verus_items::RustItem::TypeId) {
+                    return Ok((
+                        Arc::new(TypX::Primitive(Primitive::TypeTag, Arc::new(vec![]))),
+                        false,
+                    ));
+                }
+
                 let typ_args = mk_typ_args(&args)?;
                 if Some(did) == tcx.lang_items().owned_box() && typ_args.len() == 2 {
                     let (t0, ghost) = &typ_args[0];
