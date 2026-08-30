@@ -172,10 +172,11 @@ fn datatype_or_fun_to_air_commands(
         // this axiom in every query. Triggering on the tag keeps it inert
         // unless something actually asks for type identity.
         //
-        // `k_Foo` is a hash of the fully-qualified path, so it is unique across
-        // separately-compiled crates without any coordination. This mirrors how
-        // string literals are handled (`sst_to_air::str_to_const_str`) and
-        // inherits the same no-collision assumption.
+        // `k_Foo` is this context's running count, not a hash. See the tag note
+        // in `def.rs` for why a counter is kept and what invariant it costs.
+        //
+        // Incremented OUTSIDE the `uses_type_id` gate below, deliberately: ids
+        // must not shift depending on whether a module asks for type identity.
         *tag_counter += 1;
         if ctx.uses_type_id {
             let mut binders: Vec<air::ast::Binder<air::ast::Typ>> = Vec::new();

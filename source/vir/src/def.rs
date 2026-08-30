@@ -209,19 +209,47 @@ pub const TYPE_ID_CONST_BOOL: &str = "CONST_BOOL";
 // built-in constructors (declared in the prelude) use small NEGATIVE ids, while
 // user constructors are numbered 1, 2, 3, ... as they are emitted.
 //
-// The counter replaced a hash of the type's path, and with it the last collision
-// *assumption*: distinct constructors now get distinct ids by construction. What
-// makes a per-context counter sound is that the number is materialised in exactly
-// one place -- the tag axiom in `datatype_to_air` -- and never crosses contexts:
-// facts travel between modules as VIR, from which AIR is regenerated. So
-// injectivity is only ever needed within a single solver context, and one
-// emission pass per context supplies it. Two emission passes into one context
-// would break that, which is why there is exactly one.
+// The counter removes the SPEC-SIDE collision assumption: distinct constructors
+// get distinct ids by construction, with no hash to collide. It does not remove
+// the assumption that matters most, and an earlier version of this note claimed
+// it removed "the last" one, which was wrong. `type_id::<T>()` denotes a
+// `core::any::TypeId`, whose runtime value is a 128-bit hash; under a runtime
+// collision the `assume_specification` in `vstd/std_specs/any.rs` is false, and
+// no choice of spec-side id can prevent that. It is also the assumption
+// `core::any::Any::downcast` already rests on, so it is not one we added.
 //
-// The cost is that an id is positional rather than intrinsic: adding a datatype
-// shifts the ones after it, so an unrelated edit can perturb a proof's AIR. That
-// is bounded by the emission gate -- modules that never mention type identity
-// emit no tag axioms at all.
+// Hashing the path here would not mitigate it either. A path hash and rustc's
+// type-id hash are independent functions over different domains, so they collide
+// on different pairs: under a runtime collision the path hashes still differ, the
+// spec still says the two types are distinct, and the specification is falsified
+// exactly as it is here. Hashing only adds a SECOND failure mode -- a 63-bit path
+// collision, some 2^65 more likely than the runtime one -- without removing the
+// first. That is why the counter is kept.
+//
+// What the counter costs instead is a structural invariant. Ids are positional,
+// so they mean something only within the context that emitted them, and two
+// emission passes over DIFFERENT or DIFFERENTLY-ORDERED datatype sets must never
+// reach one context. `Foo` bound to both `tag%mk(i)` and `tag%mk(j)` gives
+// `i = j` by datatype injectivity, which is False -- and an inconsistent context
+// discharges every query, so the module reports fully verified with all of its
+// proofs void. (Two IDENTICAL passes are harmless: the axioms are duplicates.)
+//
+// Three things hold that invariant up today, and all three must survive any
+// refactoring here:
+//   1. one call site -- `verifier.rs` builds `bucket_context` once per module;
+//   2. deterministic iteration -- `Datatypes`, `Ctx::mono_types` and
+//      `Ctx::spec_fn_types` are all `Vec`s, so one set always yields one order.
+//      A `HashSet` here would break injectivity with no second call written;
+//   3. spinoff queries REPLAY the stored batches rather than regenerating them.
+//
+// There is no context-consistency probe today, so a violation would be silent. A
+// bare `(check-sat)` over a loaded bucket context -- `unsat` meaning the axioms
+// are contradictory -- would cost one solver call per bucket and make it loud.
+//
+// Being positional also costs proof stability: adding a datatype shifts the ids
+// after it, so an unrelated edit can perturb a proof's AIR. That is bounded by
+// the emission gate -- modules that never mention type identity emit no tag
+// axioms at all.
 pub const TYPE_TAG_SORT: &str = "TypeTag";
 pub const TYPE_TAG: &str = "TYPE%tag";
 // The decorated tag: `TYPE%tagd(d, t)` folds a type's decoration spine into its
