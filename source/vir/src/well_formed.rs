@@ -113,10 +113,16 @@ impl EmitError for EmitErrorState {
 /// trait hasn't been computed yet.
 pub fn finish_dyn_compatability_checks(
     krate: &Krate,
+    other_crates: &[Krate],
     checks: Vec<DynCompatabilityChecks>,
 ) -> Result<(), Vec<VirErr>> {
     let mut trait_map = HashMap::new();
-    for traitt in krate.traits.iter() {
+    // Imported crates first, so a trait in the crate being verified wins any
+    // collision. `check_one_typ` admits a `dyn T` whenever `T` is in the *merged*
+    // trait map, which spans imported crates, so this deferred check has to span
+    // them as well or a `dyn` of another crate's trait is rejected here as
+    // "not declared to Verus" after being accepted there.
+    for traitt in other_crates.iter().flat_map(|k| k.traits.iter()).chain(krate.traits.iter()) {
         trait_map.insert(traitt.x.name.clone(), traitt.clone());
     }
 
