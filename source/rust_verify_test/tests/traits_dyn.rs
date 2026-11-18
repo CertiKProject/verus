@@ -859,3 +859,118 @@ test_verify_one_file! {
         fn test(x: &dyn Q) { needs_p::<u8, _>(x); needs_p::<u16, _>(x); }
     } => Ok(())
 }
+
+// Erasing a value of a *type parameter* preserves the trait's spec functions.
+// The per-impl axiom only fires once the impl is resolved, so this used to be
+// unprovable for a generic `F: T` even though it holds for every concrete `F`.
+test_verify_one_file! {
+    #[test] dyn_spec_fn_generic_self verus_code! {
+        trait T { spec fn f(&self) -> int; }
+        fn test<F: T>(v: &F) {
+            let d: &dyn T = v;
+            assert(d.f() == v.f());
+        }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] dyn_spec_fn_generic_self_box verus_code! {
+        use vstd::prelude::*;
+        trait T { spec fn f(&self) -> int; }
+        fn test<F: T>(v: F) {
+            let d: Box<dyn T> = Box::new(v);
+            assert(d.f() == v.f());
+        }
+    } => Ok(())
+}
+
+// Quantifying over the erased type must not collapse two erasures: a `dyn T`
+// built from `A` keeps `A`'s answer and not `B`'s.
+test_verify_one_file! {
+    #[test] dyn_spec_fn_generic_no_confusion verus_code! {
+        trait T { spec fn f(&self) -> int; }
+        struct A;
+        struct B;
+        impl T for A { spec fn f(&self) -> int { 1 } }
+        impl T for B { spec fn f(&self) -> int { 2 } }
+        fn test(a: &A, b: &B) {
+            let da: &dyn T = a;
+            let db: &dyn T = b;
+            assert(da.f() == 1);
+            assert(db.f() == 2);
+            assert(da.f() == db.f()); // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+// The bound is the guard: a type parameter with no `T` bound cannot be erased
+// to `dyn T` in the first place, so the axiom says nothing about one.
+test_verify_one_file! {
+    #[test] dyn_spec_fn_generic_two_params verus_code! {
+        trait T { spec fn f(&self) -> int; }
+        fn test<F: T, G: T>(v: &F, w: &G) {
+            let dv: &dyn T = v;
+            let dw: &dyn T = w;
+            assert(dv.f() == v.f());
+            assert(dw.f() == w.f());
+            assert(dv.f() == dw.f()); // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}
+
+// A spec fn inherited from a supertrait, observed through a *subtrait* object.
+// The dyn trait is `Sub`, the method belongs to `Sup`, and `Sub`'s vtable
+// carries it, so the same equation holds.
+test_verify_one_file! {
+    #[test] dyn_spec_fn_inherited_supertrait verus_code! {
+        trait Sup { spec fn s(&self) -> int; }
+        trait Sub: Sup { fn v(&self) -> u64; }
+        struct C;
+        impl Sup for C { spec fn s(&self) -> int { 7 } }
+        impl Sub for C { fn v(&self) -> u64 { 1 } }
+        fn test_concrete(c: &C) {
+            let d: &dyn Sub = c;
+            assert(d.s() == 7);
+        }
+        fn test_generic<F: Sub>(v: &F) {
+            let d: &dyn Sub = v;
+            assert(d.s() == v.s());
+        }
+    } => Ok(())
+}
+
+// Two hops, with the supertrait's arguments substituted through each of them:
+// `Sub: Mid<u8>` and `Mid<B>: Sup<B>` give `dyn Sub` the spec fn of `Sup<u8>`.
+test_verify_one_file! {
+    #[test] dyn_spec_fn_inherited_transitive_subst verus_code! {
+        trait Sup<A> { spec fn s(&self, a: A) -> int; }
+        trait Mid<B>: Sup<B> { spec fn m(&self) -> int; }
+        trait Sub: Mid<u8> { fn v(&self) -> u64; }
+        fn test<F: Sub>(v: &F) {
+            let d: &dyn Sub = v;
+            assert(d.s(3u8) == v.s(3u8));
+            assert(d.m() == v.m());
+        }
+    } => Ok(())
+}
+
+// ...and it still does not collapse two different erasures.
+test_verify_one_file! {
+    #[test] dyn_spec_fn_inherited_no_confusion verus_code! {
+        trait Sup { spec fn s(&self) -> int; }
+        trait Sub: Sup { fn v(&self) -> u64; }
+        struct A;
+        struct B;
+        impl Sup for A { spec fn s(&self) -> int { 1 } }
+        impl Sub for A { fn v(&self) -> u64 { 1 } }
+        impl Sup for B { spec fn s(&self) -> int { 2 } }
+        impl Sub for B { fn v(&self) -> u64 { 2 } }
+        fn test(a: &A, b: &B) {
+            let da: &dyn Sub = a;
+            let db: &dyn Sub = b;
+            assert(da.s() == 1);
+            assert(db.s() == 2);
+            assert(da.s() == db.s()); // FAILS
+        }
+    } => Err(err) => assert_one_fails(err)
+}

@@ -870,6 +870,19 @@ pub fn func_axioms_to_air(
                 return Ok((Arc::new(decl_commands), check_commands));
             }
 
+            if let FunctionKind::TraitMethodDecl { trait_path, .. } = &function.x.kind {
+                let orig_trait =
+                    ctx.global.extension_to_trait.get(trait_path).unwrap_or(trait_path);
+                if ctx.trait_map.contains_key(orig_trait) {
+                    crate::traits::dyn_spec_fn_axioms_generic(
+                        ctx,
+                        &mut decl_commands,
+                        orig_trait,
+                        &function,
+                    );
+                }
+            }
+
             let mk_inv = |decl_commands: &mut Vec<Command>, name: &Fun, qid: &str, is_rec: bool| {
                 let name = suffix_global_id(&fun_to_air_ident(&ctx.name_ctxt, name));
 
