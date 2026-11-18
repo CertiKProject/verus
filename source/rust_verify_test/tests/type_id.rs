@@ -197,6 +197,65 @@ test_verify_one_file! {
     } => Err(err) => assert_one_fails(err)
 }
 
+// --- `dyn` types are rejected, not silently indistinguishable ---------------
+//
+// Verus models a trait object type by its trait path and type arguments, which
+// cannot tell `dyn A` from `dyn B`; neither the equality nor the disequality of
+// their tags is provable. The error names that at the call site rather than
+// leaving an unexplained failure wherever the identity is compared. The
+// identity of what is *inside* a trait object is a separate question and is the
+// one a downcast needs.
+
+test_verify_one_file! {
+    #[test] dyn_type_id_rejected verus_code! {
+        use verus_builtin::type_id;
+        trait A { spec fn a(&self) -> u64; }
+        proof fn t() {
+            let x = type_id::<dyn A>();
+        }
+    } => Err(err) => assert_vir_error_msg(err, "does not support `type_id` of the trait object type")
+}
+
+// A tag folds in the tags of its arguments, so a `dyn` type anywhere in the
+// type is just as indistinguishable as one at the top.
+test_verify_one_file! {
+    #[test] dyn_type_id_rejected_under_decoration verus_code! {
+        use vstd::prelude::*;
+        use verus_builtin::type_id;
+        trait A { spec fn a(&self) -> u64; }
+        proof fn t() {
+            let x = type_id::<Box<dyn A>>();
+        }
+    } => Err(err) => assert_vir_error_msg(err, "does not support `type_id` of the trait object type")
+}
+
+test_verify_one_file! {
+    #[test] dyn_type_id_rejected_in_datatype_arg verus_code! {
+        use vstd::prelude::*;
+        use verus_builtin::type_id;
+        trait A { spec fn a(&self) -> u64; }
+        struct Wrap<T: ?Sized>(core::marker::PhantomData<T>);
+        proof fn t() {
+            let x = type_id::<Wrap<dyn A>>();
+        }
+    } => Err(err) => assert_vir_error_msg(err, "does not support `type_id` of the trait object type")
+}
+
+// A `?Sized` type parameter is not a `dyn` type: generic code that takes the
+// identity of its parameter still works, which is what `vstd_extra`'s tagged
+// storage relies on.
+test_verify_one_file! {
+    #[test] unsized_type_param_still_allowed verus_code! {
+        use verus_builtin::type_id;
+        proof fn t<T: ?Sized>() {
+            assert(type_id::<T>() == type_id::<T>());
+        }
+        proof fn u<T: ?Sized>() {
+            assert(type_id::<&T>() != type_id::<T>());
+        }
+    } => Ok(())
+}
+
 // --- `type_id_of`: the identity of the type a value actually has -------------
 //
 // A1: for a sized static type the value-level and type-level identities

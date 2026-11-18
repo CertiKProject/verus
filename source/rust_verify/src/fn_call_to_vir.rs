@@ -1253,13 +1253,46 @@ fn verus_item_to_vir<'tcx, 'a>(
             ExprItem::TypeId => {
                 record_spec_fn(bctx, expr);
                 assert!(args.len() == 0);
+                let arg_ty = node_substs[0].expect_ty();
+
+                // Verus models a trait object type by its trait path and type
+                // arguments alone, which is not enough to tell one `dyn` type
+                // from another: `dyn A` and `dyn B` get tags no axiom relates or
+                // separates, so `type_id::<dyn A>() != type_id::<dyn B>()` is not
+                // provable (and neither is the equality). Rejecting here turns
+                // that into an error at the call site instead of an unexplained
+                // failure wherever the identity is eventually compared.
+                //
+                // The identity of the type *inside* a trait object is a different
+                // question, and is the one a downcast needs -- see
+                // `patches/ANY-SUPPORT-PLAN.md` section 4.1a in the vostd tree.
+                //
+                // Anywhere in the type, not just at the top: a tag folds in the
+                // tags of its arguments, so `Box<dyn A>` and `Wrap<dyn A>` are no
+                // more distinguishable from their `dyn B` counterparts than
+                // `dyn A` is. This check is syntactic, so it does not see a
+                // `?Sized` type parameter later instantiated at a `dyn` type;
+                // that case stays sound but equally weak.
+                if arg_ty.walk().into_iter().any(|arg| {
+                    arg.as_type().map_or(false, |t| matches!(t.kind(), TyKind::Dynamic(..)))
+                }) {
+                    return err_span(
+                        expr.span,
+                        format!(
+                            "Verus does not support `type_id` of the trait object type `{arg_ty}`: \
+                             two different `dyn` types are indistinguishable in Verus's model of \
+                             type identity",
+                        ),
+                    );
+                }
+
                 let t = mid_ty_to_vir(
                     tcx,
                     &bctx.ctxt.verus_items,
                     None::<&mut std::collections::HashMap<vir::ast::Path, rustc_span::def_id::DefId>>,
                     bctx.fun_id,
                     expr.span,
-                    &node_substs[0].expect_ty(),
+                    &arg_ty,
                     None,
                 )?;
 
