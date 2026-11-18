@@ -29,6 +29,7 @@ fn auto_ext_equal_typ(ctx: &Ctx, typ: &Typ) -> bool {
         TypX::Primitive(crate::ast::Primitive::StrSlice, _) => true,
         TypX::Primitive(crate::ast::Primitive::Ptr, _) => false,
         TypX::Primitive(crate::ast::Primitive::Global, _) => false,
+        TypX::Primitive(crate::ast::Primitive::TypeTag, _) => false,
         TypX::FnDef(..) => false,
         TypX::MutRef(_) => false,
         TypX::Opaque { .. } => false,
@@ -77,7 +78,8 @@ fn insert_auto_ext_equal(ctx: &Ctx, exp: &Exp) -> Exp {
             | UnaryOpr::ProofNote(_)
             | UnaryOpr::AutoDecreases
             | UnaryOpr::AutoLoopEnsures
-            | UnaryOpr::ToDyn(..) => {
+            | UnaryOpr::ToDyn(..)
+            | UnaryOpr::TypeTagOf(..) => {
                 exp.new_x(ExpX::UnaryOpr(op.clone(), insert_auto_ext_equal(ctx, e)))
             }
             UnaryOpr::HasResolved(..) => exp.clone(),

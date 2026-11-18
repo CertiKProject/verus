@@ -2488,6 +2488,23 @@ pub fn arch_word_bits() -> nat {
 }
 
 #[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::type_id"]
+pub fn type_id<T: ?Sized>() -> core::any::TypeId {
+    unimplemented!();
+}
+
+/// The identity of the type a value actually has at runtime.
+///
+/// For a sized `T` this is `type_id::<T>()` -- a sized type admits no erasure.
+/// For a trait object it is the identity of the type that was erased into it,
+/// which is the question a downcast asks and the one `type_id` cannot answer.
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::type_id_of"]
+pub fn type_id_of<T: ?Sized>(_x: &T) -> core::any::TypeId {
+    unimplemented!();
+}
+
+#[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::is_smaller_than"]
 pub fn is_smaller_than<A, B>(_: A, _: B) -> bool {
     unimplemented!();

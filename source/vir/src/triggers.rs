@@ -142,6 +142,10 @@ fn check_trigger_expr_arg(state: &mut State, arg: &Exp) {
                 // recurse inside coercions
                 check_trigger_expr_arg(state, arg)
             }
+            UnaryOpr::TypeTagOf(..) => {
+                // val%tag(..) is an ordinary uninterpreted application
+                check_trigger_expr_arg(state, arg)
+            }
             UnaryOpr::AutoDecreases | UnaryOpr::AutoLoopEnsures => {
                 // recurse inside marker
                 check_trigger_expr_arg(state, arg)
@@ -253,6 +257,7 @@ fn check_trigger_expr(
         ExpX::VarAt(_, VarAt::Pre) => Ok(()),
         ExpX::Old(_, _) => panic!("internal error: Old"),
         ExpX::NullaryOpr(crate::ast::NullaryOpr::ConstGeneric(_typ)) => Ok(()),
+        ExpX::NullaryOpr(crate::ast::NullaryOpr::TypeTag(_typ)) => Ok(()),
         ExpX::NullaryOpr(crate::ast::NullaryOpr::TraitBound(..)) => {
             Err(error(&exp.span, "triggers cannot contain trait bounds"))
         }
@@ -297,7 +302,8 @@ fn check_trigger_expr(
             | UnaryOpr::AutoDecreases
             | UnaryOpr::AutoLoopEnsures
             | UnaryOpr::ProofNote(_)
-            | UnaryOpr::ToDyn(..) => Ok(()),
+            | UnaryOpr::ToDyn(..)
+            | UnaryOpr::TypeTagOf(..) => Ok(()),
             UnaryOpr::IsVariant { .. } | UnaryOpr::Field { .. } => {
                 check_trigger_expr_arg(state, arg);
                 Ok(())

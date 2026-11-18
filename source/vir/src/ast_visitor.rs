@@ -240,6 +240,10 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                 let t = self.visit_typ(typ)?;
                 R::ret(|| NullaryOpr::ConstGeneric(R::get(t)))
             }
+            NullaryOpr::TypeTag(typ) => {
+                let t = self.visit_typ(typ)?;
+                R::ret(|| NullaryOpr::TypeTag(R::get(t)))
+            }
             NullaryOpr::TraitBound(trait_id, typs) => {
                 let ts = self.visit_typs(typs)?;
                 R::ret(|| NullaryOpr::TraitBound(trait_id.clone(), R::get_vec_a(ts)))
@@ -277,6 +281,10 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
             UnaryOpr::HasType(t) => {
                 let t = self.visit_typ(t)?;
                 R::ret(|| UnaryOpr::HasType(R::get(t)))
+            }
+            UnaryOpr::TypeTagOf(t) => {
+                let t = self.visit_typ(t)?;
+                R::ret(|| UnaryOpr::TypeTagOf(R::get(t)))
             }
             UnaryOpr::HasResolved(t) => {
                 let t = self.visit_typ(t)?;

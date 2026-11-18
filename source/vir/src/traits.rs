@@ -1091,6 +1091,48 @@ pub fn trait_decls_to_air(ctx: &Ctx, krate: &crate::sst::KrateSst) -> Commands {
             ));
             let forall = mk_bind_expr(&bind, &mk_implies(&hypothesis, &conclusion));
             commands.push(Arc::new(CommandX::Global(mk_unnamed_axiom(forall))));
+
+            // A2: erasure is the identity on runtime type.
+            //   forall Self, A1..Am, x.
+            //     val%tag($dyn, DYN%T(A1..Am), to_dyn%T(Self, A1..Am, x))
+            //       == val%tag(Self, x)
+            //
+            // One axiom rather than a case analysis, because the right-hand side
+            // asks the source value the same question instead of answering it.
+            // Where the source is sized, A1 folds it to `type_id::<Self>()` --
+            // for a type parameter just as well as for a concrete type, which is
+            // what no per-impl fact can do. Where the source is itself a trait
+            // object (a supertrait upcast, which lowers to a ToDyn whose Self
+            // *is* a `dyn` type) it recurses into that object's own erased
+            // identity, which is the correct answer. Concluding
+            // `type_id::<Self>()` directly would be wrong in exactly that case.
+            let self_ids = typ_to_ids(ctx, &typ_args[0]);
+            let dyn_ids = typ_to_ids(ctx, &dyn_typ);
+            let mut lhs_args = dyn_ids.clone();
+            lhs_args.push(to_dyn.clone());
+            let lhs = air::ast_util::str_apply(crate::def::VAL_TAG, &lhs_args);
+            let mut rhs_args = self_ids.clone();
+            rhs_args.push(x.clone());
+            let rhs = air::ast_util::str_apply(crate::def::VAL_TAG, &rhs_args);
+            let mut binders: Vec<air::ast::Binder<air::ast::Typ>> = Vec::new();
+            for typ_param in typ_params.iter() {
+                for (x, t) in crate::def::suffix_typ_param_ids_types(typ_param) {
+                    binders.push(ident_binder(&x.lower(), &str_typ(t)));
+                }
+            }
+            binders.push(ident_binder(&Arc::new(x_name.to_string()), &str_typ(crate::def::POLY)));
+            let qid = crate::def::new_internal_qid(
+                ctx,
+                format!("{}_val_tag_to_dyn", path_as_friendly_rust_name(&tr.x.name)),
+            );
+            let bind = Arc::new(BindX::Quant(
+                Quant::Forall,
+                Arc::new(binders),
+                Arc::new(vec![Arc::new(vec![lhs.clone()])]),
+                qid,
+            ));
+            let forall = mk_bind_expr(&bind, &air::ast_util::mk_eq(&lhs, &rhs));
+            commands.push(Arc::new(CommandX::Global(mk_unnamed_axiom(forall))));
         }
     }
     Arc::new(commands)
@@ -1656,7 +1698,7 @@ pub fn get_dyn_traits(krate: &Krate) -> HashSet<Path> {
 // Permit receiver reads and the dispatch Self argument of receiver calls;
 // conservatively reject other uses in logical and operational contracts.
 fn check_dyn_spec(f: &Function) -> Result<(), ()> {
-    use crate::ast::{PlaceX, UnaryOp, VarIdent};
+    use crate::ast::{PlaceX, UnaryOp, UnaryOpr, VarIdent};
     use crate::ast_visitor::{AstVisitor, NoScoper, Walk};
 
     struct Visitor<'a> {
@@ -1699,6 +1741,20 @@ fn check_dyn_spec(f: &Function) -> Result<(), ()> {
         fn visit_expr(&mut self, expr: &Expr) -> Result<(), ()> {
             if self.is_receiver_expr(expr) {
                 return Ok(());
+            }
+            // `type_id_of(self)` asks the receiver which type it actually is. The
+            // `Self` type argument selects the receiver's own implementation,
+            // exactly as the dispatch argument of a receiver call does, and the
+            // term is a function of the receiver *value*: each impl proves it of
+            // its own type, and after substituting `dyn T` it reads the erased
+            // type's identity, which the coercion axiom says is that same one.
+            // Without this, a trait cannot state what its vtable already knows.
+            if let ExprX::UnaryOpr(UnaryOpr::TypeTagOf(t), arg) = &expr.x {
+                if self.is_receiver_expr(arg)
+                    && matches!(&**t, TypX::TypParam(p) if *p == crate::def::trait_self_type_param())
+                {
+                    return Ok(());
+                }
             }
             if let ExprX::Call {
                 target: CallTarget::Fun(CallTargetKind::Dynamic, _, typs, _, _),

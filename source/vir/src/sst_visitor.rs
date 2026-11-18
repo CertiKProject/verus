@@ -262,6 +262,10 @@ pub(crate) trait Visitor<R: Returner, Err, Scope: Scoper> {
                 let t = self.visit_typ(t)?;
                 R::ret(|| exp_new(ExpX::NullaryOpr(NullaryOpr::ConstGeneric(R::get(t)))))
             }
+            ExpX::NullaryOpr(NullaryOpr::TypeTag(t)) => {
+                let t = self.visit_typ(t)?;
+                R::ret(|| exp_new(ExpX::NullaryOpr(NullaryOpr::TypeTag(R::get(t)))))
+            }
             ExpX::NullaryOpr(NullaryOpr::TraitBound(p, ts)) => {
                 let ts = self.visit_typs(ts)?;
                 R::ret(|| {
@@ -309,6 +313,10 @@ pub(crate) trait Visitor<R: Returner, Err, Scope: Scoper> {
                     UnaryOpr::HasResolved(t) => {
                         let t = self.visit_typ(t)?;
                         R::ret(|| UnaryOpr::HasResolved(R::get(t)))
+                    }
+                    UnaryOpr::TypeTagOf(t) => {
+                        let t = self.visit_typ(t)?;
+                        R::ret(|| UnaryOpr::TypeTagOf(R::get(t)))
                     }
                     UnaryOpr::ToDyn(t, impl_paths) => {
                         let t = self.visit_typ(t)?;

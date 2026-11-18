@@ -5,7 +5,7 @@ use crate::resolve_traits::{ResolutionResult, ResolvedItem, resolve_trait_item};
 use crate::reveal_hide::RevealHideResult;
 use crate::rust_to_vir_base::{
     bitwidth_and_signedness_of_integer_type, is_smt_arith, is_type_std_rc_or_arc_or_ref,
-    typ_of_expr_adjusted, typ_of_node_unadjusted,
+    mid_ty_to_vir, typ_of_expr_adjusted, typ_of_node_unadjusted,
 };
 use crate::rust_to_vir_expr::{
     check_lit_int, closure_param_typs, closure_to_vir, expr_to_vir, expr_to_vir_consume,
@@ -522,7 +522,7 @@ fn verus_item_to_vir<'tcx, 'a>(
     let args_len = args.len();
 
     if !bctx.in_ghost && uncompilable_verus_fn(verus_item) {
-        return err_span(
+        let err = crate::util::err_span_bare(
             expr.span,
             format!(
                 "cannot use `{f_name}`{:} in executable context",
@@ -533,6 +533,16 @@ fn verus_item_to_vir<'tcx, 'a>(
                 }
             ),
         );
+        // `type_id` is the spec-level identity; the executable one is a real
+        // `TypeId`, which vstd specifies as returning exactly this.
+        let err = match verus_item {
+            VerusItem::Expr(ExprItem::TypeId | ExprItem::TypeIdOf) => err.help(
+                "use `core::any::TypeId::of::<T>()` in executable code; \
+                 `vstd::std_specs::any` specifies it as `type_id::<T>()`",
+            ),
+            _ => err,
+        };
+        return Err(err);
     }
 
     let mk_expr = |x: ExprX| Ok(bctx.spanned_typed_new(expr.span, &expr_typ()?, x));
@@ -1239,6 +1249,46 @@ fn verus_item_to_vir<'tcx, 'a>(
                 let kind = IntegerTypeBoundKind::ArchWordBits;
 
                 mk_expr(ExprX::UnaryOpr(UnaryOpr::IntegerTypeBound(kind), arg))
+            }
+            ExprItem::TypeId => {
+                record_spec_fn(bctx, expr);
+                assert!(args.len() == 0);
+                let t = mid_ty_to_vir(
+                    tcx,
+                    &bctx.ctxt.verus_items,
+                    None::<&mut std::collections::HashMap<vir::ast::Path, rustc_span::def_id::DefId>>,
+                    bctx.fun_id,
+                    expr.span,
+                    &node_substs[0].expect_ty(),
+                    None,
+                )?;
+
+                mk_expr(ExprX::NullaryOpr(vir::ast::NullaryOpr::TypeTag(t)))
+            }
+            ExprItem::TypeIdOf => {
+                record_spec_fn(bctx, expr);
+                // The type argument, not the argument's type: `type_id_of` takes
+                // `&T` and asks about the `T`, and `&T` would be a different
+                // identity, since identity is decoration-sensitive.
+                let t = mid_ty_to_vir(
+                    tcx,
+                    &bctx.ctxt.verus_items,
+                    None::<&mut std::collections::HashMap<vir::ast::Path, rustc_span::def_id::DefId>>,
+                    bctx.fun_id,
+                    expr.span,
+                    &node_substs[0].expect_ty(),
+                    None,
+                )?;
+                match &expr.kind {
+                    ExprKind::Call(_, args) => {
+                        assert!(args.len() == 1);
+                        let arg0 = args.first().unwrap();
+                        let arg0 =
+                            expr_to_vir_consume(bctx, arg0).expect("internal compiler error");
+                        mk_expr(ExprX::UnaryOpr(UnaryOpr::TypeTagOf(t), arg0))
+                    }
+                    _ => panic!("internal error: expected Call for type_id_of"),
+                }
             }
             ExprItem::ClosureToFnSpec | ExprItem::ClosureToFnProof => {
                 internal_err_unless!(args_len == 1, expr.span, "expected `closure_to_fn`", &args);

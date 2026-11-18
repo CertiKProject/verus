@@ -50,6 +50,7 @@ enum TypNum {
     Never,
     ConstPtr,
     Global,
+    TypeTag,
 }
 
 fn gen_num_typ(n: TypNum, ts: Vec<Typ>) -> Typ {
@@ -129,6 +130,7 @@ fn gen_typ(state: &mut State, typ: &vir::ast::Typ) -> Typ {
                 Primitive::StrSlice => unreachable!(),
                 Primitive::Ptr => TypNum::Ptr,
                 Primitive::Global => TypNum::Global,
+                Primitive::TypeTag => TypNum::TypeTag,
             };
             gen_num_typ(n, gen_typs(state, ts))
         }

@@ -270,6 +270,7 @@ pub enum Primitive {
     StrSlice,
     Ptr, // Mut ptr, unless Const decoration is applied
     Global,
+    TypeTag,
 }
 
 #[derive(Debug, Serialize, Deserialize, Hash, ToDebugSNode, Clone)]
@@ -388,6 +389,8 @@ pub enum NullaryOpr {
     TypEqualityBound(Path, Typs, Ident, Typ),
     /// predicate representing const type bound, e.g., `const X: usize`
     ConstTypBound(Typ, Typ),
+    /// identity of a type, as in `type_id::<T>()`; carries the type it identifies
+    TypeTag(Typ),
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, ToDebugSNode)]
@@ -584,6 +587,10 @@ pub enum UnaryOpr {
     /// Coerce from concrete type to `dyn T`, recording the Self type and the
     /// trait implementations needed to construct the trait object.
     ToDyn(Typ, ImplPaths),
+    /// The identity of the type a value actually has at runtime, where the Typ is
+    /// the value's static type. For a sized static type the two coincide; for a
+    /// `dyn T` the value's is the type erased into it.
+    TypeTagOf(Typ),
     /// Isolation boundary for the loop of the given label, which must be contained
     /// in the boundary.
     LoopIsolationBoundary(Label),
