@@ -584,6 +584,14 @@ test_verify_one_file! {
     } => Err(err) => assert_vir_error_msg(err, "non-positive position")
 }
 
+// The auto-trait components of a `dyn` type cannot simply be dropped, even
+// though a bound `X: Send` is itself a no-op: `TypX::Dyn` has no room for them,
+// so `dyn T + Send` and `dyn T` would become one VIR type, and these are
+// distinct Rust types with distinct `TypeId`s. Accepting them by dropping them
+// makes `type_id::<dyn T>() == type_id::<dyn T + Send>()` provable -- directly,
+// and through any `spec fn tid<A: ?Sized>() -> TypeId` wrapper, so no syntactic
+// restriction on `type_id` contains it. Supporting `dyn T + Send` means giving
+// `TypX::Dyn` the auto-trait set, which is also what `dyn T<X = ..>` needs.
 test_verify_one_file! {
     #[test] dyn_unsupported1 verus_code! {
         trait T {}
@@ -777,4 +785,67 @@ test_verify_one_file! {
             assert(s@[0].f() == *b); // FAILS
         }
     } => Err(err) => assert_one_fails(err)
+}
+
+// `dyn T` gets an impl of every supertrait of `T`, transitively. Each emitted
+// impl is checked against the supertrait's own declaration, which carries
+// `where Self: V` for each of *its* supertraits, so stopping after one hop is a
+// hard error (`the trait bound Dyn<n, ()>: V is not satisfied`) rather than
+// mere incompleteness.
+test_verify_one_file! {
+    #[test] dyn_supertrait_transitive verus_code! {
+        trait P { spec fn p(&self) -> u64; }
+        trait Q: P { spec fn q(&self) -> u64; }
+        trait R: Q { fn r(&self) -> u64; }
+        fn needs_p<X: P + ?Sized>(x: &X) -> u64 { 0 }
+        fn test(x: &dyn R) -> u64 { needs_p(x) }
+    } => Ok(())
+}
+
+test_verify_one_file! {
+    #[test] dyn_supertrait_transitive_depth4 verus_code! {
+        trait T1 { spec fn f1(&self) -> u64; }
+        trait T2: T1 { spec fn f2(&self) -> u64; }
+        trait T3: T2 { spec fn f3(&self) -> u64; }
+        trait T4: T3 { fn f4(&self) -> u64; }
+        fn needs1<X: T1 + ?Sized>(x: &X) -> u64 { 0 }
+        fn test(x: &dyn T4) -> u64 { needs1(x) }
+    } => Ok(())
+}
+
+// The supertrait's arguments are written in terms of the subtrait's parameters,
+// so each hop has to substitute: `R: Q<u8>` and `Q<B>: P<B>` give `dyn R: P<u8>`,
+// not `dyn R: P<B>` for an unbound `B`.
+test_verify_one_file! {
+    #[test] dyn_supertrait_transitive_substitution verus_code! {
+        trait P<A> { spec fn p(&self, a: A) -> u64; }
+        trait Q<B>: P<B> { spec fn q(&self) -> u64; }
+        trait R: Q<u8> { fn r(&self) -> u64; }
+        fn needs_p<X: P<u8> + ?Sized>(x: &X) -> u64 { 0 }
+        fn test(x: &dyn R) -> u64 { needs_p(x) }
+    } => Ok(())
+}
+
+// A supertrait reached by two paths is emitted once; emitting it twice would be
+// a conflicting-impl error in the generated program.
+test_verify_one_file! {
+    #[test] dyn_supertrait_transitive_diamond verus_code! {
+        trait A { spec fn a(&self) -> u64; }
+        trait B: A { spec fn b(&self) -> u64; }
+        trait C: A { spec fn c(&self) -> u64; }
+        trait D: B + C { fn d(&self) -> u64; }
+        fn needs_a<X: A + ?Sized>(x: &X) -> u64 { 0 }
+        fn test(x: &dyn D) -> u64 { needs_a(x) }
+    } => Ok(())
+}
+
+// Two distinct instantiations of one generic supertrait are two trait
+// references, and want two impls.
+test_verify_one_file! {
+    #[test] dyn_supertrait_transitive_two_instantiations verus_code! {
+        trait P<A> { spec fn p(&self, a: A) -> u64; }
+        trait Q: P<u8> + P<u16> { fn q(&self) -> u64; }
+        fn needs_p<A, X: P<A> + ?Sized>(x: &X) { }
+        fn test(x: &dyn Q) { needs_p::<u8, _>(x); needs_p::<u16, _>(x); }
+    } => Ok(())
 }

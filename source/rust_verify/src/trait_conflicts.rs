@@ -28,6 +28,7 @@
 use crate::trait_check_ast::*;
 use crate::trait_check_generate::*;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use vir::ast::{
     AssocTypeImpl, CrateId, Dt, GenericBoundX, GenericBounds, Ident, Path, Primitive, Sizedness,
     TraitId, TypDecoration, TypDecorationArg,
@@ -425,6 +426,8 @@ pub(crate) fn gen_check_trait_impl_conflicts(
     // This works around https://github.com/rust-lang/rust/issues/57893 .
     // This (and vir::traits::get_dyn_traits) can be removed when that issue is fixed.
     let dyn_traits: HashSet<Path> = vir::traits::get_dyn_traits(vir_crate);
+    let traits_by_path: HashMap<Path, &vir::ast::Trait> =
+        vir_crate.traits.iter().map(|t| (t.x.name.clone(), t)).collect();
     let mut n_trait: usize = 0;
     for t in &vir_crate.traits {
         if !dyn_traits.contains(&t.x.name) {
@@ -465,6 +468,134 @@ pub(crate) fn gen_check_trait_impl_conflicts(
         ));
         let trait_as_datatype = Box::new(TypX::Datatype(name, Vec::new(), t_args));
         let trait_polarity = rustc_middle::ty::ImplPolarity::Positive;
+
+        // `dyn T` is also a `U` for every supertrait `U` of `T`, transitively.
+        // Rust supplies those impls automatically; we do not, so a bound `X: U`
+        // cannot be discharged at `X = dyn T` without them -- which is what makes
+        // types like `Segment<dyn AnyUFrameMeta>` (where
+        // `Segment<M: AnyFrameMeta>`) unusable even though they are legal Rust.
+        //
+        // Same `self_typ` as the impl above, so these all describe the one
+        // `Dyn<n_trait, ..>` rather than introducing new types.
+        // The trait's own bounds include its supertrait bounds (`Self: U`), and
+        // those are precisely what these impls supply. Carrying them over would
+        // make each impl require itself -- rustc reports that as `overflow
+        // evaluating the requirement`, not as a missing impl.
+        let is_self_bound = |b: &vir::ast::GenericBound| match &**b {
+            GenericBoundX::Trait(TraitId::Path(_), targs) if targs.len() >= 1 => {
+                matches!(
+                    &*targs[0],
+                    vir::ast::TypX::TypParam(p) if *p == vir::def::trait_self_type_param()
+                )
+            }
+            _ => false,
+        };
+        let non_self_bounds: GenericBounds =
+            Arc::new(t.x.typ_bounds.iter().filter(|b| !is_self_bound(b)).cloned().collect());
+        let (_, mut super_bounds) = gen_generics(
+            state,
+            &t.x.typ_params.iter().map(|(x, _)| x.clone()).collect(),
+            &non_self_bounds,
+            None,
+        );
+        let (_, super_a_bounds) =
+            gen_generics(state, &t.x.assoc_typs, &t.x.assoc_typs_bounds, None);
+        super_bounds.extend(super_a_bounds);
+
+        // The supertraits have to be covered transitively, not just one hop. Each
+        // emitted `impl U for Dyn<n_trait, ..>` is checked by rustc against `U`'s
+        // own declaration, which carries `where Self: V` for every supertrait `V`
+        // of `U` -- so omitting the second hop is not incompleteness but a hard
+        // error, `the trait bound Dyn<n, ()>: V is not satisfied`, reported
+        // against the subtrait's declaration.
+        //
+        // `supertraits_of` lists one trait's direct supertraits as
+        // (path, trait args), with `Self` as the first argument. Walking it needs
+        // the args rewritten at each hop: `V`'s arguments are written in terms of
+        // `U`'s parameters, and the impl needs them in terms of `t`'s.
+        let supertraits_of = |tr: &vir::ast::Trait| -> Vec<(Path, vir::ast::Typs)> {
+            tr.x.typ_bounds
+                .iter()
+                .filter_map(|bound| {
+                    let GenericBoundX::Trait(TraitId::Path(u_path), targs) = &**bound else {
+                        return None;
+                    };
+                    // Only a bound whose first argument is `Self` is a supertrait.
+                    if targs.len() < 1 {
+                        return None;
+                    }
+                    match &*targs[0] {
+                        vir::ast::TypX::TypParam(p) if *p == vir::def::trait_self_type_param() => {}
+                        _ => return None,
+                    }
+                    Some((u_path.clone(), targs.clone()))
+                })
+                .collect()
+        };
+
+        let mut worklist: Vec<(Path, vir::ast::Typs)> = supertraits_of(t);
+        // Dedup is on the whole trait reference, not just the path: `U<u8>` and
+        // `U<u16>` are two supertraits and want two impls, while the same
+        // reference reached twice (a diamond) must be emitted once or rustc
+        // reports conflicting impls.
+        let mut emitted: HashSet<String> = HashSet::new();
+        while let Some((u_path, u_targs)) = worklist.pop() {
+            if !emitted.insert(format!("{:?}{:?}", u_path, u_targs)) {
+                continue;
+            }
+            // Follow `u`'s own supertraits, substituting the arguments `t` passes
+            // to `u` for `u`'s parameters. `Self` maps to `u_targs[0]`, which is
+            // `Self` for every reference reached this way, so the chain stays
+            // rooted at the one `Dyn<n_trait, ..>`.
+            if let Some(u) = traits_by_path.get(&u_path) {
+                if u.x.typ_params.len() + 1 == u_targs.len() {
+                    let mut substs: HashMap<Ident, vir::ast::Typ> = HashMap::new();
+                    substs.insert(vir::def::trait_self_type_param(), u_targs[0].clone());
+                    for ((x, _), targ) in u.x.typ_params.iter().zip(u_targs[1..].iter()) {
+                        substs.insert(x.clone(), targ.clone());
+                    }
+                    for (v_path, v_targs) in supertraits_of(u) {
+                        let v_targs: vir::ast::Typs = Arc::new(
+                            v_targs
+                                .iter()
+                                .map(|typ| vir::sst_util::subst_typ(&substs, typ))
+                                .collect(),
+                        );
+                        worklist.push((v_path, v_targs));
+                    }
+                }
+            }
+            // An impl has to supply the supertrait's associated types, and we do
+            // not model those here yet. Skipping leaves the bound undischargeable
+            // (incompleteness) rather than emitting a wrong impl -- and it is
+            // unreachable in practice, because rustc demands a projection
+            // (`dyn T<X = ..>`) for such a hierarchy and Verus rejects that
+            // earlier, in `mid_ty_to_vir`'s `Dynamic` arm.
+            //
+            // An unknown path is a trait Verus has no declaration for -- pruned
+            // out of the merged krate, or never declared. Its associated types
+            // cannot be inspected, so skip it too: treating unknown as "has none"
+            // emits an impl with no `assoc_typs` for a trait that may well have
+            // them, which surfaces far away as
+            // `Verus does not recognize associated type ... of trait ...`.
+            match traits_by_path.get(&u_path) {
+                Some(u) if u.x.assoc_typs.len() == 0 => {}
+                _ => continue,
+            }
+            let u_name = state.trait_name(&u_path);
+            let u_args = gen_typ_slice(state, &u_targs[1..]);
+            state.trait_impls.push(TraitImpl {
+                span: spans.from_air_span(&t.span, None),
+                self_typ: self_typ.clone(),
+                generic_params: generic_params.clone(),
+                generic_bounds: super_bounds.clone(),
+                trait_as_datatype: Box::new(TypX::Datatype(u_name, Vec::new(), u_args)),
+                assoc_typs: Vec::new(),
+                trait_polarity,
+                is_clone: false,
+            });
+        }
+
         let decl = TraitImpl {
             span,
             self_typ,
