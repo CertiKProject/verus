@@ -597,7 +597,7 @@ test_verify_one_file! {
         trait T {}
         fn test(d: &(dyn T + Send)) {
         }
-    } => Err(err) => assert_vir_error_msg(err, "Verus does not currently support dyn with more than one trait")
+    } => Err(err) => assert_vir_error_msg(err, "dyn with an auto trait")
 }
 
 test_verify_one_file! {
@@ -605,7 +605,17 @@ test_verify_one_file! {
         trait T {}
         fn test(d: &dyn Fn() -> ()) {
         }
-    } => Err(err) => assert_vir_error_msg(err, "Verus does not currently support dyn with more than one trait")
+    } => Err(err) => assert_vir_error_msg(err, "dyn with an associated-type binding")
+}
+
+// A trait with associated types cannot be `dyn` at all: rustc demands the
+// binding (E0191) and the binding is what Verus rejects.
+test_verify_one_file! {
+    #[test] dyn_unsupported_assoc_binding verus_code! {
+        trait T { type X; spec fn f(&self) -> u64; }
+        fn test(d: &dyn T<X = u8>) {
+        }
+    } => Err(err) => assert_vir_error_msg(err, "dyn with an associated-type binding")
 }
 
 test_verify_one_file! {

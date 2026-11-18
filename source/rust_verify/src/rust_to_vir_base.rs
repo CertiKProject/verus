@@ -1315,7 +1315,32 @@ pub(crate) fn mid_ty_to_vir_ghost<'tcx>(
         }
         TyKind::Dynamic(preds, _) => {
             use rustc_middle::ty::ExistentialPredicate;
+            // All three of these are still rejected, but say which one it is and
+            // why. `TypX::Dyn` carries a trait path and its type arguments and
+            // nothing else, so an auto-trait set or an associated-type binding
+            // would be dropped -- making two distinct Rust types one VIR type,
+            // which `type_id` through a `?Sized` parameter can observe.
             if preds.len() != 1 {
+                for pred in preds.iter() {
+                    match pred.skip_binder() {
+                        // More than one of these is the remaining case below.
+                        ExistentialPredicate::Trait(_) => {}
+                        ExistentialPredicate::AutoTrait(_) => {
+                            unsupported_err!(
+                                span,
+                                "dyn with an auto trait (e.g. `dyn T + Send`), because Verus does \
+                                 not model the auto-trait set as part of the type"
+                            );
+                        }
+                        ExistentialPredicate::Projection(_) => {
+                            unsupported_err!(
+                                span,
+                                "dyn with an associated-type binding (e.g. `dyn T<X = u8>`), \
+                                 because Verus does not model the binding as part of the type"
+                            );
+                        }
+                    }
+                }
                 unsupported_err!(span, "dyn with more than one trait");
             }
             match preds[0].skip_binder() {
