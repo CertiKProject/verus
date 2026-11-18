@@ -428,9 +428,25 @@ pub(crate) fn gen_check_trait_impl_conflicts(
     let dyn_traits: HashSet<Path> = vir::traits::get_dyn_traits(vir_crate);
     let traits_by_path: HashMap<Path, &vir::ast::Trait> =
         vir_crate.traits.iter().map(|t| (t.x.name.clone(), t)).collect();
+    // A trait whose own blanket impl covers `?Sized` already has an impl for
+    // `dyn T`, so emitting ours on top of it is what rustc calls a conflict.
+    // Skipping is only safe where the two could not disagree -- a trait with no
+    // methods and no associated types, which is the case
+    // `vir::traits::compute_dyn_compatibility` also exempts from rust#57893.
+    // `core::any::Any` declared to Verus is that case.
+    let unsized_blanketed: HashSet<Path> = vir_crate
+        .trait_impls
+        .iter()
+        .filter(|ti| vir::traits::is_unsized_blanket_impl(ti))
+        .map(|ti| ti.x.trait_path.clone())
+        .collect();
     let mut n_trait: usize = 0;
     for t in &vir_crate.traits {
         if !dyn_traits.contains(&t.x.name) {
+            continue;
+        }
+        if unsized_blanketed.contains(&t.x.name) && vir::traits::is_tolerated_blanket_trait(t) {
+            n_trait += 1;
             continue;
         }
         let name = state.trait_name(&t.x.name);
@@ -579,7 +595,19 @@ pub(crate) fn gen_check_trait_impl_conflicts(
             // them, which surfaces far away as
             // `Verus does not recognize associated type ... of trait ...`.
             match traits_by_path.get(&u_path) {
-                Some(u) if u.x.assoc_typs.len() == 0 => {}
+                Some(u) if u.x.assoc_typs.len() == 0 => {
+                    // A supertrait whose own blanket impl covers `?Sized`
+                    // already has an impl for this `Dyn<..>`, so ours would be
+                    // the conflict rather than the fix. Same exemption as the
+                    // trait's own impl above, and for the same reason: with no
+                    // members there is nothing the two could disagree about.
+                    // `core::any::Any` as a supertrait is this case.
+                    if unsized_blanketed.contains(&u_path)
+                        && vir::traits::is_tolerated_blanket_trait(u)
+                    {
+                        continue;
+                    }
+                }
                 _ => continue,
             }
             let u_name = state.trait_name(&u_path);

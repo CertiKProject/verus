@@ -142,8 +142,8 @@ fn check_trigger_expr_arg(state: &mut State, arg: &Exp) {
                 // recurse inside coercions
                 check_trigger_expr_arg(state, arg)
             }
-            UnaryOpr::TypeTagOf(..) => {
-                // val%tag(..) is an ordinary uninterpreted application
+            UnaryOpr::TypeTagOf(..) | UnaryOpr::DynValue(..) => {
+                // ordinary uninterpreted applications
                 check_trigger_expr_arg(state, arg)
             }
             UnaryOpr::AutoDecreases | UnaryOpr::AutoLoopEnsures => {
@@ -303,7 +303,8 @@ fn check_trigger_expr(
             | UnaryOpr::AutoLoopEnsures
             | UnaryOpr::ProofNote(_)
             | UnaryOpr::ToDyn(..)
-            | UnaryOpr::TypeTagOf(..) => Ok(()),
+            | UnaryOpr::TypeTagOf(..)
+            | UnaryOpr::DynValue(..) => Ok(()),
             UnaryOpr::IsVariant { .. } | UnaryOpr::Field { .. } => {
                 check_trigger_expr_arg(state, arg);
                 Ok(())

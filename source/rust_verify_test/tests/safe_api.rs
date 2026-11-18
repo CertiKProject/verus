@@ -241,6 +241,19 @@ test_verify_one_file_with_options! {
     } => Err(err) => assert_vir_error_msg(err, "Verus does not currently support dyn")
 }
 
+// `dyn Any` used to be rejected outright -- the trait was not declared to Verus
+// -- and this test recorded that. It is a legal type now, and returning one is
+// not a route to calling `foo` without its precondition:
+//
+// - the boxed value's concrete type is `foo`'s fn *item* type, which cannot be
+//   named, so there is no type to downcast to;
+// - naming one would need a fn-pointer cast, which Verus rejects outright
+//   ("does not currently support casting a pointer");
+// - and a nameable type whose public method carries a precondition is caught
+//   where that method is declared, by the rule above.
+//
+// `dyn Fn(u32) -> ()` is the case that *is* a violation, and `dyn_returned`
+// above still covers it: that one is callable without a downcast.
 test_verify_one_file_with_options! {
     #[test] any_returned ["-V check-api-safety"] => verus_code! {
         use vstd::prelude::*;
@@ -252,7 +265,7 @@ test_verify_one_file_with_options! {
         fn test() -> Box<dyn core::any::Any> {
             Box::new(foo)
         }
-    } => Err(err) => assert_vir_error_msg(err, "trait core::any::Any not declared to Verus")
+    } => Ok(())
 }
 
 /////// Fancy trait support

@@ -318,6 +318,11 @@ pub(crate) trait Visitor<R: Returner, Err, Scope: Scoper> {
                         let t = self.visit_typ(t)?;
                         R::ret(|| UnaryOpr::TypeTagOf(R::get(t)))
                     }
+                    UnaryOpr::DynValue(td, ts) => {
+                        let td = self.visit_typ(td)?;
+                        let ts = self.visit_typ(ts)?;
+                        R::ret(|| UnaryOpr::DynValue(R::get(td), R::get(ts)))
+                    }
                     UnaryOpr::ToDyn(t, impl_paths) => {
                         let t = self.visit_typ(t)?;
                         R::ret(|| UnaryOpr::ToDyn(R::get(t), impl_paths.clone()))

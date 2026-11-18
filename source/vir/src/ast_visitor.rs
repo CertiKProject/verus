@@ -286,6 +286,11 @@ pub(crate) trait AstVisitor<R: Returner, Err, Scope: Scoper> {
                 let t = self.visit_typ(t)?;
                 R::ret(|| UnaryOpr::TypeTagOf(R::get(t)))
             }
+            UnaryOpr::DynValue(td, ts) => {
+                let td = self.visit_typ(td)?;
+                let ts = self.visit_typ(ts)?;
+                R::ret(|| UnaryOpr::DynValue(R::get(td), R::get(ts)))
+            }
             UnaryOpr::HasResolved(t) => {
                 let t = self.visit_typ(t)?;
                 R::ret(|| UnaryOpr::HasResolved(R::get(t)))

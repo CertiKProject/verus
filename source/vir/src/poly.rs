@@ -686,6 +686,12 @@ fn visit_exp(ctx: &Ctx, state: &mut State, exp: &Exp) -> Exp {
                     let e = coerce_exp_to_poly(ctx, &e1);
                     mk_exp(ExpX::UnaryOpr(op.clone(), e.clone()))
                 }
+                UnaryOpr::DynValue(_td, ts) => {
+                    // dyn%val%T hands back the erased value, boxed, at the
+                    // target type.
+                    let e = coerce_exp_to_poly(ctx, &e1);
+                    mk_exp_typ(&Arc::new(TypX::Boxed(ts.clone())), ExpX::UnaryOpr(op.clone(), e))
+                }
                 UnaryOpr::TypeTagOf(_t) => {
                     // val%tag takes the value boxed, like the type it describes.
                     let e = coerce_exp_to_poly(ctx, &e1);

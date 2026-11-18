@@ -591,6 +591,10 @@ pub enum UnaryOpr {
     /// the value's static type. For a sized static type the two coincide; for a
     /// `dyn T` the value's is the type erased into it.
     TypeTagOf(Typ),
+    /// The value inside a trait object, read back at a type: the first Typ is
+    /// the trait object's type, the second the type to read it back at. Only
+    /// constrained where the second is the type that was erased.
+    DynValue(Typ, Typ),
     /// Isolation boundary for the loop of the given label, which must be contained
     /// in the boundary.
     LoopIsolationBoundary(Label),

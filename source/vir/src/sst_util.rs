@@ -559,6 +559,9 @@ impl ExpX {
                     HasType(t) => {
                         (format!("has_type({}, {:?})", exp.x.to_user_string(global), t), 99)
                     }
+                    DynValue(_td, ts) => {
+                        (format!("dyn_value({}, {:?})", exp.x.to_user_string(global), ts), 99)
+                    }
                     TypeTagOf(t) => {
                         (format!("type_id_of({}, {:?})", exp.x.to_user_string(global), t), 99)
                     }

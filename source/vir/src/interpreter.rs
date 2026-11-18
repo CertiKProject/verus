@@ -1555,6 +1555,7 @@ fn eval_expr_internal(ctx: &Ctx, state: &mut State, exp: &Exp) -> Result<Exp, Vi
                 }
                 ToDyn(..) => ok,
                 TypeTagOf(..) => ok,
+                DynValue(..) => ok,
                 HasResolved(_) => ok,
                 CustomErr(_) => Ok(e),
                 AutoDecreases => Ok(e),

@@ -2340,6 +2340,22 @@ fn check_expr(
         ExprX::UnaryOpr(UnaryOpr::LoopIsolationBoundary(_), e1) => {
             check_expr(ctxt, record, typing, outer_mode, expect, e1, outer_proph)
         }
+        ExprX::UnaryOpr(UnaryOpr::DynValue(..), e1) => {
+            if ctxt.check_ghost_blocks && typing.block_ghostness == Ghost::Exec {
+                return Err(error(&expr.span, "cannot use `dyn_value` in exec mode"));
+            }
+            let mut typing = typing.push_in_pure(true);
+            check_expr_has_mode(
+                ctxt,
+                record,
+                &mut typing,
+                Mode::Spec,
+                e1,
+                Mode::Spec,
+                outer_proph,
+            )?;
+            Ok((Mode::Spec, Proph::No))
+        }
         ExprX::UnaryOpr(UnaryOpr::TypeTagOf(_), e1) => {
             if ctxt.check_ghost_blocks && typing.block_ghostness == Ghost::Exec {
                 return Err(error(&expr.span, "cannot use `type_id_of` in exec mode"));

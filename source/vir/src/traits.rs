@@ -1044,11 +1044,20 @@ pub fn trait_decls_to_air(ctx: &Ctx, krate: &crate::sst::KrateSst) -> Commands {
             ));
             let decl_to_dyn = Arc::new(DeclX::fun_or_const(
                 ctx.name_ctxt.to_dyn(&tr.x.name),
+                Arc::new(dparams.clone()),
+                str_typ(crate::def::POLY),
+            ));
+            // dyn_val%T(target ids, A1..Am, x): the value inside a trait object,
+            // read back at a type. Same parameter shape as to_dyn%T, whose Self
+            // ids are the type the value was written at.
+            let decl_dyn_val = Arc::new(DeclX::fun_or_const(
+                ctx.name_ctxt.dyn_val(&tr.x.name),
                 Arc::new(dparams),
                 str_typ(crate::def::POLY),
             ));
             commands.push(Arc::new(CommandX::Global(decl_trait_id)));
             commands.push(Arc::new(CommandX::Global(decl_to_dyn)));
+            commands.push(Arc::new(CommandX::Global(decl_dyn_val)));
 
             // Typing axiom for to_dyn:
             //   forall Self, A1..Am, x. has_type(x, Self) ==>
@@ -1132,6 +1141,42 @@ pub fn trait_decls_to_air(ctx: &Ctx, krate: &crate::sst::KrateSst) -> Commands {
                 qid,
             ));
             let forall = mk_bind_expr(&bind, &air::ast_util::mk_eq(&lhs, &rhs));
+            commands.push(Arc::new(CommandX::Global(mk_unnamed_axiom(forall))));
+
+            // A3: the coercion is the identity on the value, so reading it back
+            // at the type it was written at returns it.
+            //   forall Self, A1..Am, x.
+            //     dyn_val%T(Self, A1..Am, to_dyn%T(Self, A1..Am, x)) == x
+            //
+            // The target ids are the coercion's own Self ids here, which is what
+            // keeps this from saying anything about a read at another type: at
+            // one of those the application is unconstrained, which is why a
+            // caller has to establish the identity first. That is the asymmetry
+            // a downcast has: the guard is what licenses the value.
+            let mut dyn_val_args: Vec<air::ast::Expr> = Vec::new();
+            for targ in typ_args.iter() {
+                dyn_val_args.extend(typ_to_ids(ctx, targ));
+            }
+            dyn_val_args.push(to_dyn.clone());
+            let dyn_val = ident_apply(&ctx.name_ctxt.dyn_val(&tr.x.name), &dyn_val_args);
+            let mut binders: Vec<air::ast::Binder<air::ast::Typ>> = Vec::new();
+            for typ_param in typ_params.iter() {
+                for (x, t) in crate::def::suffix_typ_param_ids_types(typ_param) {
+                    binders.push(ident_binder(&x.lower(), &str_typ(t)));
+                }
+            }
+            binders.push(ident_binder(&Arc::new(x_name.to_string()), &str_typ(crate::def::POLY)));
+            let qid = crate::def::new_internal_qid(
+                ctx,
+                format!("{}_dyn_val_to_dyn", path_as_friendly_rust_name(&tr.x.name)),
+            );
+            let bind = Arc::new(BindX::Quant(
+                Quant::Forall,
+                Arc::new(binders),
+                Arc::new(vec![Arc::new(vec![dyn_val.clone()])]),
+                qid,
+            ));
+            let forall = mk_bind_expr(&bind, &air::ast_util::mk_eq(&dyn_val, &x));
             commands.push(Arc::new(CommandX::Global(mk_unnamed_axiom(forall))));
         }
     }
@@ -1881,8 +1926,31 @@ pub(crate) fn find_trait_impl_from_extension(
     return Err(err);
 }
 
+/// Is this the `core::any::Any` whose `?Sized` blanket impl we deliberately
+/// tolerate, despite rust#57893?
+///
+/// The hazard that issue describes is a blanket impl and the object impl
+/// *resolving differently*. `Any` as Verus sees it has no methods and no
+/// associated types -- `vstd::std_specs::any` declares it that way on purpose,
+/// since `core`'s blanket impl reads `TypeId::of::<Self>()` and at
+/// `Self = dyn Any` that is not what the vtable returns -- so there is nothing
+/// for the two impls to resolve differently about: no vtable slot, no
+/// projection, no specification.
+///
+/// The member check is the actual reason and is enforced, not assumed: a future
+/// declaration that specified a method would stop qualifying. The path check is
+/// deliberate conservatism on top of it. The same argument would justify
+/// exempting *any* member-less trait, and `traits_dyn`'s
+/// `dyn_rust_blanket_unsoundness` is exactly that case -- generalizing means
+/// relaxing a soundness regression test, which wants its own review rather than
+/// riding along with `Any` support.
+pub fn is_tolerated_blanket_trait(tr: &Trait) -> bool {
+    let any_path = crate::path!(crate::ast::CrateId::Core => "any", "Any");
+    tr.x.name == any_path && tr.x.methods.len() == 0 && tr.x.assoc_typs.len() == 0
+}
+
 // Is an impl of the form impl<A: ?Sized + ...> T<...> for A
-fn is_unsized_blanket_impl(ti: &TraitImpl) -> bool {
+pub fn is_unsized_blanket_impl(ti: &TraitImpl) -> bool {
     // trait_typ_args[0] is the Self argument
     if let TypX::TypParam(slf) = &*ti.x.trait_typ_args[0] {
         // Self type is just a TypParam, so we have a blanket impl
@@ -2170,7 +2238,7 @@ fn compute_dyn_compatibility(
     }
     if let Some(d) = unsized_blanket_super {
         d
-    } else if unsized_blanketed_traits.contains(tr_path) {
+    } else if !is_tolerated_blanket_trait(tr) && unsized_blanketed_traits.contains(tr_path) {
         Arc::new(DynCompatible::RejectUnsizedBlanketImpl { trait_path: tr_path.clone() })
     } else {
         Arc::new(DynCompatible::Accept)

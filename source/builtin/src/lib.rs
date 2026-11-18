@@ -2504,6 +2504,18 @@ pub fn type_id_of<T: ?Sized>(_x: &T) -> core::any::TypeId {
     unimplemented!();
 }
 
+/// The value inside a trait object, read back at type `S`.
+///
+/// Meaningful exactly where `S` is the type that was erased -- the coercion is
+/// the identity on the value, so reading it back at the type it was written at
+/// returns it. At any other `S` nothing is known about the result, which is why
+/// a caller needs `type_id_of(x) == type_id::<S>()` first.
+#[cfg(verus_keep_ghost)]
+#[rustc_diagnostic_item = "verus::verus_builtin::dyn_value"]
+pub fn dyn_value<S, T: ?Sized>(_x: &T) -> S {
+    unimplemented!();
+}
+
 #[cfg(verus_keep_ghost)]
 #[rustc_diagnostic_item = "verus::verus_builtin::is_smaller_than"]
 pub fn is_smaller_than<A, B>(_: A, _: B) -> bool {

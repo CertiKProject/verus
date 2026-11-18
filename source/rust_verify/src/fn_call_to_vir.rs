@@ -536,10 +536,11 @@ fn verus_item_to_vir<'tcx, 'a>(
         // `type_id` is the spec-level identity; the executable one is a real
         // `TypeId`, which vstd specifies as returning exactly this.
         let err = match verus_item {
-            VerusItem::Expr(ExprItem::TypeId | ExprItem::TypeIdOf) => err.help(
-                "use `core::any::TypeId::of::<T>()` in executable code; \
+            VerusItem::Expr(ExprItem::TypeId | ExprItem::TypeIdOf | ExprItem::DynValue) => err
+                .help(
+                    "use `core::any::TypeId::of::<T>()` in executable code; \
                  `vstd::std_specs::any` specifies it as `type_id::<T>()`",
-            ),
+                ),
             _ => err,
         };
         return Err(err);
@@ -1297,6 +1298,47 @@ fn verus_item_to_vir<'tcx, 'a>(
                 )?;
 
                 mk_expr(ExprX::NullaryOpr(vir::ast::NullaryOpr::TypeTag(t)))
+            }
+            ExprItem::DynValue => {
+                record_spec_fn(bctx, expr);
+                // dyn_value::<S, T>(x): S is the type to read back at, T the
+                // trait object's type, taken from the argument's own type rather
+                // than from the parameter, which is `&T`.
+                let target = mid_ty_to_vir(
+                    tcx,
+                    &bctx.ctxt.verus_items,
+                    None::<&mut std::collections::HashMap<vir::ast::Path, rustc_span::def_id::DefId>>,
+                    bctx.fun_id,
+                    expr.span,
+                    &node_substs[0].expect_ty(),
+                    None,
+                )?;
+                let source = mid_ty_to_vir(
+                    tcx,
+                    &bctx.ctxt.verus_items,
+                    None::<&mut std::collections::HashMap<vir::ast::Path, rustc_span::def_id::DefId>>,
+                    bctx.fun_id,
+                    expr.span,
+                    &node_substs[1].expect_ty(),
+                    None,
+                )?;
+                if !matches!(&*vir::ast_util::undecorate_typ(&source), vir::ast::TypX::Dyn(..)) {
+                    return err_span(
+                        expr.span,
+                        "`dyn_value` reads the value inside a trait object, so its argument must \
+                         have a `dyn` type",
+                    );
+                }
+                match &expr.kind {
+                    ExprKind::Call(_, args) => {
+                        assert!(args.len() == 1);
+                        let arg0 = args.first().unwrap();
+                        let arg0 =
+                            expr_to_vir_consume(bctx, arg0).expect("internal compiler error");
+                        mk_expr(ExprX::UnaryOpr(UnaryOpr::DynValue(source, target), arg0))
+                    }
+                    _ => panic!("internal error: expected Call for dyn_value"),
+                }
             }
             ExprItem::TypeIdOf => {
                 record_spec_fn(bctx, expr);

@@ -81,6 +81,7 @@ pub(crate) const PROJECT_POINTEE_METADATA_DECORATION: &str = "pointee_metadata%%
 const PREFIX_PROJECT_PARAM: &str = "Proj%";
 const PREFIX_TRAIT_BOUND: &str = "tr_bound%";
 const PREFIX_TO_DYN: &str = "to_dyn%";
+const PREFIX_DYN_VAL: &str = "dyn_val%";
 pub(crate) const SIZED_BOUND: &str = "sized";
 const PREFIX_STATIC: &str = "static%";
 const PREFIX_BREAK_LABEL: &str = "break_label%";
@@ -694,6 +695,10 @@ pub fn proj_param(i: usize) -> Ident {
 impl NameCtxt {
     pub fn trait_bound(&self, trait_path: &Path) -> Ident {
         Arc::new(format!("{}{}", PREFIX_TRAIT_BOUND, self.path_to_string(trait_path)))
+    }
+
+    pub fn dyn_val(&self, trait_path: &Path) -> Ident {
+        Arc::new(PREFIX_DYN_VAL.to_string() + &self.path_to_string(trait_path))
     }
 
     pub fn to_dyn(&self, trait_path: &Path) -> Ident {

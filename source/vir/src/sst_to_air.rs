@@ -1344,6 +1344,20 @@ pub(crate) fn exp_to_expr(ctx: &Ctx, exp: &Exp, expr_ctxt: &ExprCtxt) -> Result<
                 // the inner expression.
                 return exp_to_expr(ctx, e, expr_ctxt);
             }
+            UnaryOpr::DynValue(td, ts) => {
+                let TypX::Dyn(trait_path, typ_args, _) = &*undecorate_typ(td) else {
+                    panic!("DynValue expects a dyn source type: {:?}", td)
+                };
+                // dyn_val%T(target ids, trait args.., value): the target's ids
+                // are what make the axiom fire only for the type that was
+                // erased.
+                let mut args: Vec<Expr> = typ_to_ids(ts);
+                for t in typ_args.iter() {
+                    args.extend(typ_to_ids(t));
+                }
+                args.push(exp_to_expr(ctx, e, expr_ctxt)?);
+                ident_apply(&ctx.name_ctxt.dyn_val(trait_path), &args)
+            }
             UnaryOpr::TypeTagOf(t) => {
                 let mut exprs: Vec<Expr> = typ_to_ids(t);
                 exprs.push(exp_to_expr(ctx, e, expr_ctxt)?);
